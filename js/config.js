@@ -13,6 +13,11 @@ window.NCERT_CONFIG = {
   supabaseUrl: 'https://xvjaigzelvitfwxkpezy.supabase.co',
   supabaseAnonKey: 'sb_publishable_jYtiSpqylPmNtQKZmM7adQ_NeYAoeP3',  // publishable (public) key
 
+  // Free built-in AI (NVIDIA Nemotron, via the /api/generate server function) for
+  // signed-in students without a working Gemini key. The NVIDIA keys are NOT here:
+  // they are secret environment variables on Vercel (NVIDIA_API_KEYS).
+  freeAI: true,
+
   // Public contact email shown on the Privacy Policy and Terms pages.
   contactEmail: 'traderabhinav699@gmail.com'
 };

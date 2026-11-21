@@ -393,3 +393,6 @@ const NCERT_CHAPTERS = (() => {
   }
   return list;
 })();
+
+// Also usable from the /api/generate server function.
+if (typeof module !== "undefined" && module.exports) module.exports = { CURRICULUM, NCERT_CHAPTERS };

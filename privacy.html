@@ -85,7 +85,8 @@
         <h2>4. Services we rely on</h2>
         <ul>
             <li><b>Supabase</b>: sign-in and the database that stores signed-in students' notes.</li>
-            <li><b>Google</b>: Google Sign-In, and the Gemini API that writes the notes.</li>
+            <li><b>Google</b>: Google Sign-In, and the Gemini API that writes notes when you use your own key.</li>
+            <li><b>NVIDIA</b>: when you're signed in without a working Gemini key, our server asks NVIDIA's AI (Nemotron) to write the notes. Only the chapter and topic list are sent, never your name, email or key.</li>
             <li><b>Vercel</b>: hosts the website. Like any web host, it keeps standard server logs such as IP addresses.</li>
             <li><b>Content delivery networks</b>: jsDelivr, cdnjs, the Tailwind CSS CDN and Google Fonts deliver the page's styles, fonts and libraries, and see your IP address when the page loads.</li>
         </ul>

@@ -291,10 +291,11 @@
                 <div class="flex items-start gap-4">
                     <div class="w-10 h-10 shrink-0 rounded-xl bg-indigo-600 text-white flex items-center justify-center"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
                     <div class="flex-1">
-                        <p class="font-heading font-bold text-slate-900 dark:text-white">Add your free Gemini API key to start</p>
-                        <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Notes are written by Google Gemini using your own key. It takes a minute to get one, and it stays in this browser only.</p>
+                        <p class="font-heading font-bold text-slate-900 dark:text-white">Start generating notes for free</p>
+                        <p class="text-sm text-slate-600 dark:text-slate-400 mt-1"><b>Sign in with Google</b> to use the free built-in AI (NVIDIA Nemotron), no key needed. Or add your own free Gemini API key: it takes a minute and stays in this browser only.</p>
                         <div class="mt-3 flex flex-wrap gap-2">
-                            <button data-open-guide class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition"><i class="fa-solid fa-list-ol"></i> New here? Step-by-step guide</button>
+                            <button data-open-auth class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition"><i class="fa-brands fa-google"></i> Sign in for free notes</button>
+                            <button data-open-guide class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 transition"><i class="fa-solid fa-list-ol"></i> Get a Gemini key (guide)</button>
                             <button data-open-key class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 transition"><i class="fa-solid fa-key"></i> I have a key</button>
                         </div>
                     </div>
@@ -539,7 +540,7 @@
             <ol id="guideSteps" class="px-6 sm:px-8 pt-7 pb-2 space-y-6">
                 <li id="guideStepSignin" class="guide-step hidden">
                     <h3 class="font-heading font-bold text-slate-900 dark:text-white">Sign in to save your notes <span class="ml-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Recommended</span></h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Every chapter you generate is saved to your account, so you never have to generate it again, on any device.</p>
+                    <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Signed-in students can generate notes with the <b>free built-in AI</b>, no key needed. Every chapter is also saved to your account, so you never have to generate it again, on any device. If you sign in, you can skip the key steps below.</p>
                     <div id="guideSigninBody" class="mt-3"></div>
                 </li>
 
@@ -664,8 +665,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
     <script src="js/config.js"></script>
     <script src="js/curriculum.js"></script>
+    <script src="js/prompts.js"></script>
     <script src="js/gemini.js"></script>
     <script src="js/cloud.js"></script>
+    <script src="js/freeai.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

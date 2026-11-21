@@ -207,7 +207,8 @@
       (has ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/20'
            : 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-500/25');
     $('apiKeyBtnLabel').textContent = has ? 'API key active' : 'Add API key';
-    $('noKeyBanner').classList.toggle('hidden', has);
+    // Signed-in students can use the free built-in AI, so they don't need the "add a key" banner.
+    $('noKeyBanner').classList.toggle('hidden', has || FreeAI.ready());
     $('keyRemoveBtn').classList.toggle('hidden', !has);
     renderSettings();
   }
@@ -263,6 +264,7 @@
       const models = await Gemini.listModels(key);
       if (key !== Gemini.getKey()) Gemini.clearBad();   // a different key may have different models
       Gemini.setKey(key);
+      geminiDown = false;
       store.set('ncert_gemini_models', models);
       const current = Gemini.getModel();
       const model = models.includes(current) && !Gemini.badModels().includes(current) ? current : Gemini.pickBestModel(models);
@@ -479,7 +481,7 @@
   }
 
   Cloud.onChange(async (u, event) => {
-    renderAccount(); renderGuide();
+    renderAccount(); renderGuide(); updateKeyUI();
     if (event === 'PROVIDERS') {
       // Supabase told us whether Google sign-in is on. First visit: offer the choice.
       if (currentChapter) { renderSyncBadge(); renderActions(); }
@@ -569,7 +571,9 @@
 
     $('settingsKeyStatus').innerHTML = Gemini.getKey()
       ? `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i>Key saved · <b>${esc(Gemini.getModel())}</b>`
-      : `<i class="fa-solid fa-circle-exclamation text-amber-500 mr-1"></i>No key yet. You can still read shared notes.`;
+      : FreeAI.ready()
+        ? `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i>No key needed: you're using the free built-in AI (<b>${esc(FreeAI.LABEL)}</b>).`
+        : `<i class="fa-solid fa-circle-exclamation text-amber-500 mr-1"></i>No key yet. ${FreeAI.enabled ? 'Sign in for free notes, or add your own key.' : 'You can still read shared notes.'}`;
     const count = Object.keys(store.get(PROGRESS_KEY) || {}).length;
     $('settingsDeviceInfo').textContent = `${count} chapter${count === 1 ? '' : 's'} saved in this browser`;
   }
@@ -664,75 +668,9 @@
   }
 
   /* ================================================================
-   * PROMPTS
+   * PROMPTS (shared with the /api/generate server function: js/prompts.js)
    * ================================================================ */
-  const SYSTEM = `You are an expert CBSE teacher and NCERT subject specialist who writes outstanding, accurate study notes for Indian school students.
-Follow the latest rationalised NCERT textbook closely: its order, terminology, definitions, laws, examples, activities, boxes and in-text questions.
-Accuracy is critical. Never invent facts, data, dates or formulas. If something is not in NCERT, keep it brief and clearly mark it as extra.
-Write in clear, simple English that a student of that class can follow, but go deep: explain the why and the how, not just the what.
-Formatting rules (Markdown):
-- Use LaTeX for every formula and equation: $...$ inline and $$...$$ on its own line. Use \\ce{...} for chemical formulas and equations.
-- Use tables for comparisons, differences and classifications.
-- Use "> **Exam Tip:**", "> **Remember:**" and "> **Common Mistake:**" callouts where useful.
-- Describe important diagrams in words, naming every labelled part.
-- No preamble such as "Sure" or "Here are the notes".`;
-
-  function chapterRef(ch) {
-    return `NCERT Class ${ch.class} ${ch.subject}, book "${ch.book}", ${chapterLabel(ch)}: "${ch.title}"`;
-  }
-  const isLiterature = ch => ch.subject === 'English';
-
-  function outlinePrompt(ch) {
-    const lit = isLiterature(ch);
-    return `Create a complete topic map for ${chapterRef(ch)}.
-Split the WHOLE ${ch.isPoem ? 'poem' : 'chapter'} into ${lit ? (ch.isPoem ? '3 to 5' : '4 to 6') : '6 to 10'} sequential study parts, in the textbook's order, so that together they cover ${lit
-      ? 'everything a student needs: about the author/poet and background, a detailed summary, a section-by-section (or stanza-by-stanza) explanation with difficult words, characters, themes, message, literary devices, and all textbook questions with answers'
-      : 'every section, sub-section, concept, definition, law, formula, derivation, solved example, activity and box item in the chapter'}.
-Each part must group closely related topics that can be explained in depth in about 1200 to 1800 words.
-The final part must be titled "Chapter Summary, Key Points & Exam Practice".
-For each part give a short title and the list of topics it covers (use the textbook's section names where possible).`;
-  }
-
-  const OUTLINE_SCHEMA = {
-    type: 'OBJECT',
-    properties: {
-      chunks: {
-        type: 'ARRAY',
-        items: {
-          type: 'OBJECT',
-          properties: { title: { type: 'STRING' }, topics: { type: 'ARRAY', items: { type: 'STRING' } } },
-          required: ['title', 'topics']
-        }
-      }
-    },
-    required: ['chunks']
-  };
-
-  function chunkPrompt(ch, outline, i) {
-    const map = outline.map((c, k) => `${k + 1}. ${c.title}: ${c.topics.join('; ')}`).join('\n');
-    const part = outline[i];
-    const last = i === outline.length - 1;
-    const lit = isLiterature(ch);
-    return `Chapter: ${chapterRef(ch)}
-
-Full topic map of the chapter:
-${map}
-
-${i > 0 ? `Parts 1 to ${i} have already been written. Do not repeat them; you may refer back briefly.\n` : ''}Now write PART ${i + 1} of ${outline.length}: "${part.title}".
-Cover exactly these topics, in this order: ${part.topics.join('; ')}.
-
-Requirements:
-- Begin with the heading "## Part ${i + 1}: ${part.title}".
-- Use a "###" heading for each topic.
-${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? '' : ' and every formula'} in one place, then exam practice: MCQs, short-answer, long-answer${lit ? ' and extract-based' : ''} questions in CBSE board pattern, each with a model answer.`
-      : lit ? `- Explain in great detail with quotes from the text, meanings of difficult words, interpretation, characters, themes and literary devices as relevant.
-- Answer any textbook questions related to this part.`
-      : `- Explain every concept from the basics in great detail: what it is, why it happens, how it works. Put NCERT definitions in **bold**.
-- Give every relevant formula with each symbol and its SI unit explained, and step-by-step derivations where NCERT has them.
-- Include fully worked examples (NCERT examples and similar exam questions) for any numerical or problem-solving topic.
-- Add real-life examples, comparison tables and exam tips where they help.`}
-- End with "### Quick Revision" (bullet points) ${last ? '' : 'and "### Check Your Understanding" (3 to 5 questions with short answers)'}.`;
-  }
+  const { SYSTEM, outlinePrompt, chunkPrompt, OUTLINE_SCHEMA } = NcertPrompts;
 
   /* ================================================================
    * NOTES READER
@@ -750,7 +688,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   function saveData() {
     if (!currentChapter || !data?.outline) return;
     const id = currentChapter.id;
-    data.model = Gemini.getModel();
+    data.model = lastModel || Gemini.getModel();
     data.updated = Date.now();
     const record = { outline: data.outline, chunks: data.chunks.slice(), model: data.model, updated: data.updated, shared: data.shared };
     const ok = store.set(NOTES_KEY(id), record);
@@ -802,11 +740,22 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     renderChapters();
   }
 
-  /* Ask for a Gemini key if there isn't one. Returns true when generation has to wait for it. */
+  /* Which AI writes the notes: the student's own Gemini key, or the free built-in AI
+     (NVIDIA Nemotron via /api/generate, for signed-in students). */
+  let geminiDown = false;   // the student's key failed and we switched to the free AI; reset when a key is saved
+  let lastModel = '';       // model that wrote the latest part (saved with the notes)
+  function provider() {
+    if (Gemini.getKey() && !geminiDown) return 'gemini';
+    if (FreeAI.ready()) return 'free';
+    return null;
+  }
+
+  /* No AI available yet: ask to sign in (free AI) or add a key. Returns true when generation has to wait. */
   function needKey(then) {
-    if (Gemini.getKey()) return false;
+    if (provider()) return false;
     showNeedKey();
-    if (!store.raw(GUIDE_SEEN)) openGuide(then); else openKeyModal(then);
+    if (!store.raw(GUIDE_SEEN)) openGuide(then);
+    else if (!(FreeAI.enabled && Cloud.canSignIn())) openKeyModal(then);
     return true;
   }
 
@@ -1058,22 +1007,51 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     `<button data-action="${action}" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${primary
       ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-indigo-400'}"><i class="fa-solid ${icon}"></i>${label}</button>`;
 
+  const signInBtn = `<button data-open-auth class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition"><i class="fa-brands fa-google"></i>Sign in with Google</button>`;
+  const freeOffer = () => FreeAI.enabled && !Cloud.user() && Cloud.canSignIn();
+
   function showNeedKey() {
-    showStatus('warn', `<b>Add your Gemini API key</b> to generate notes for this chapter. It's free and takes about a minute.`,
-      btnHtml('key', 'Add API key', 'fa-key', true));
+    if (Gemini.getKey() && geminiDown) {
+      showStatus('warn', `<b>Your Gemini key isn't working right now.</b> ${freeOffer() ? 'Sign in with Google to continue with the free built-in AI, or update your key.' : 'Update your key, or try again later.'}`,
+        (freeOffer() ? signInBtn : '') + btnHtml('key', 'Update API key', 'fa-key', !freeOffer()));
+    } else if (freeOffer()) {
+      showStatus('warn', `<b>Sign in with Google to generate notes for free</b> with the built-in AI (${esc(FreeAI.LABEL)}). Or add your own Gemini API key.`,
+        signInBtn + btnHtml('key', 'Use my own Gemini key', 'fa-key', false));
+    } else {
+      showStatus('warn', `<b>Add your Gemini API key</b> to generate notes for this chapter. It's free and takes about a minute.`,
+        btnHtml('key', 'Add API key', 'fa-key', true));
+    }
   }
 
   function showError(err, retryAction) {
     if (err?.name === 'AbortError') return;
+    const free = err?.provider === 'free';
     let msg, extra = '';
     switch (err?.kind) {
+      case 'signin': msg = '<b>Please sign in with Google again</b> to use the free built-in AI.'; extra = signInBtn; break;
       case 'auth': msg = '<b>Your API key was rejected.</b> It may be wrong, deleted or restricted.'; extra = btnHtml('key', 'Update API key', 'fa-key', false); break;
-      case 'quota': msg = '<b>Rate limit reached.</b> Gemini\'s free tier limits requests per minute and per day. Wait a minute, then try again.'; break;
+      case 'quota': msg = free ? `<b>The free AI is busy.</b> ${esc(err.message)}` : '<b>Rate limit reached.</b> Gemini\'s free tier limits requests per minute and per day. Wait a minute, then try again.'; break;
       case 'model': msg = `<b>The model "${esc(Gemini.getModel())}" isn't available for your key.</b> Choose another model in the API key settings.`; extra = btnHtml('key', 'Change model', 'fa-sliders', false); break;
-      case 'server': msg = '<b>Gemini is busy or having problems.</b> Please try again in a moment.'; break;
+      case 'server': msg = free ? `<b>The free AI had a problem.</b> ${esc(err.message)}` : '<b>Gemini is busy or having problems.</b> Please try again in a moment.'; break;
       default: msg = err instanceof TypeError ? '<b>Network error.</b> Check your internet connection and try again.' : `<b>Something went wrong:</b> ${esc(err?.message || err)}`;
     }
+    // Gemini failed and the student isn't signed in: point them at the free AI.
+    if (!free && freeOffer() && ['auth', 'quota', 'model', 'server'].includes(err?.kind)) {
+      msg += ' Or sign in with Google to use the free built-in AI instead.';
+      extra += signInBtn;
+    }
     showStatus('error', `<i class="fa-solid fa-circle-exclamation mr-1"></i>${msg}`, btnHtml(retryAction, 'Try again', 'fa-rotate-right', true) + extra);
+  }
+
+  /* The student's Gemini key failed in a way the free AI can cover: switch for the rest of this visit. */
+  function fallBackToFree(err, prov) {
+    if (prov !== 'gemini' || !FreeAI.ready() || !['auth', 'quota', 'model', 'server', 'empty', 'parse'].includes(err?.kind)) return false;
+    geminiDown = true;
+    const why = { auth: 'was rejected by Google', quota: 'hit its rate limit', model: "can't use any available Gemini model",
+                  server: 'ran into a problem at Google', empty: 'returned nothing', parse: 'returned an unreadable answer' }[err.kind];
+    modelNotice = `<i class="fa-solid fa-circle-info mr-1"></i>Your Gemini key ${why}, so these notes are being written by NCERT Notes' free built-in AI (<b>${esc(FreeAI.LABEL)}</b>).`;
+    modelNoticeFrom = '';
+    return true;
   }
 
   /* ---------- generation ---------- */
@@ -1103,17 +1081,22 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
 
   async function generateOutline(attempt = 0) {
     if (busy || needKey(() => resumeReader())) return;
-    const my = session;
+    const my = session, prov = provider();
     busy = true; renderToc(); renderActions();
-    showStatus('loading', `<i class="fa-solid fa-spinner fa-spin mr-2"></i><b>Mapping every topic in this chapter…</b><br><span class="text-xs opacity-80">Gemini is splitting the chapter into parts. The first part starts right after.</span>`);
+    showStatus('loading', `<i class="fa-solid fa-spinner fa-spin mr-2"></i><b>Mapping every topic in this chapter…</b><br><span class="text-xs opacity-80">${prov === 'free'
+      ? `The free built-in AI (${esc(FreeAI.LABEL)}) is splitting the chapter into parts. This can take up to a minute.`
+      : 'Gemini is splitting the chapter into parts. The first part starts right after.'}</span>`);
     controller = new AbortController();
     try {
-      const res = await Gemini.generateJSON({ system: SYSTEM, prompt: outlinePrompt(currentChapter), schema: OUTLINE_SCHEMA, signal: controller.signal });
+      const res = prov === 'free'
+        ? await FreeAI.outline({ chapterId: currentChapter.id, signal: controller.signal })
+        : await Gemini.generateJSON({ system: SYSTEM, prompt: outlinePrompt(currentChapter), schema: OUTLINE_SCHEMA, signal: controller.signal });
       if (my !== session) return;
-      const outline = (res.chunks || [])
-        .filter(c => c && c.title)
-        .map(c => ({ title: String(c.title).trim(), topics: (c.topics || []).map(t => String(t).trim()).filter(Boolean) }));
-      if (outline.length < 2) throw new Gemini.GeminiError('Gemini returned an incomplete topic list. Please try again.', 'parse');
+      const outline = NcertPrompts.normalizeOutline(res);
+      if (!outline) {
+        throw prov === 'free' ? new FreeAI.FreeAIError('The free AI returned an incomplete topic list. Please try again.', 'server')
+          : new Gemini.GeminiError('Gemini returned an incomplete topic list. Please try again.', 'parse');
+      }
       data = { outline, chunks: [] };
       saveData();
       busy = false; clearStatus(); renderToc();
@@ -1121,11 +1104,12 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     } catch (err) {
       if (my !== session) return;
       busy = false;
-      if (attempt < 3 && err?.kind === 'model') {
+      if (prov === 'gemini' && attempt < 3 && err?.kind === 'model') {
         showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i>That AI model isn\'t available for your key. Finding another one…');
         if (await switchModelAfter(err) && my === session) { generateOutline(attempt + 1); return; }
       }
       if (my !== session) return;
+      if (fallBackToFree(err, prov)) { generateOutline(attempt + 1); return; }
       renderToc(); renderActions();
       modelNotice = ''; modelNoticeFrom = '';
       showError(err, 'outline');
@@ -1135,7 +1119,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   async function generateChunk(i, attempt = 0) {
     if (busy || !data?.outline || i >= data.outline.length) return;
     if (needKey(() => generateChunk(i))) return;
-    const my = session;
+    const my = session, prov = provider();
     busy = true; clearStatus(); renderActions();
 
     // Drop anything at or after i (used for "rewrite").
@@ -1156,10 +1140,14 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
 
     controller = new AbortController();
     try {
-      const { text, finishReason } = await Gemini.stream({
-        system: SYSTEM, prompt: chunkPrompt(currentChapter, data.outline, i), signal: controller.signal,
-        onText: full => { if (my !== session) return; pending = full; if (!frame) frame = requestAnimationFrame(paint); }
-      });
+      const onText = full => { if (my !== session) return; pending = full; if (!frame) frame = requestAnimationFrame(paint); };
+      const { text, finishReason } = prov === 'free'
+        ? await FreeAI.stream({
+            chapterId: currentChapter.id, outline: data.outline, index: i, signal: controller.signal, onText,
+            onThinking: () => { if (my === session && pending === null && !body.querySelector('h2')) body.innerHTML = `<p class="text-sm text-slate-400"><i class="fa-solid fa-brain fa-beat-fade mr-2"></i>${esc(FreeAI.LABEL)} is thinking about “${esc(data.outline[i].title)}”… (this can take a minute)</p>`; }
+          })
+        : await Gemini.stream({ system: SYSTEM, prompt: chunkPrompt(currentChapter, data.outline, i), signal: controller.signal, onText });
+      lastModel = prov === 'free' ? FreeAI.MODEL : Gemini.getModel();
       if (my !== session) return;
       if (frame) cancelAnimationFrame(frame);
       body.classList.remove('typing-caret');
@@ -1170,17 +1158,18 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       busy = false; renderToc(); renderCommunityBanner(); renderActions();
       showModelNotice();
       if (setting('autoShare') && Cloud.user() && Cloud.community()) shareCurrent(true);
-      if (finishReason === 'MAX_TOKENS') showStatus('warn', 'This part hit Gemini\'s length limit and may end abruptly. Use "Rewrite" to try again.');
+      if (finishReason === 'MAX_TOKENS') showStatus('warn', 'This part hit the AI\'s length limit and may end abruptly. Use "Rewrite" to try again.');
     } catch (err) {
       if (my !== session) return;
       if (frame) cancelAnimationFrame(frame);
       section.remove();
       busy = false;
-      if (attempt < 3 && err?.kind === 'model') {
+      if (prov === 'gemini' && attempt < 3 && err?.kind === 'model') {
         showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i>That AI model isn\'t available for your key. Finding another one…');
         if (await switchModelAfter(err) && my === session) { generateChunk(i, attempt + 1); return; }
       }
       if (my !== session) return;
+      if (fallBackToFree(err, prov)) { generateChunk(i, attempt + 1); return; }
       renderToc(); renderActions();
       modelNotice = ''; modelNoticeFrom = '';
       showError(err, 'retry-chunk');

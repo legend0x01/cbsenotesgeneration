@@ -196,8 +196,16 @@ const Cloud = (() => {
     return 'reported';
   }
 
+  /* The signed-in student's access token, proving to /api/generate who is asking. */
+  async function accessToken() {
+    if (!client || !user) return null;
+    const { data } = await client.auth.getSession();
+    return data?.session?.access_token || null;
+  }
+
   return {
     enabled,
+    accessToken,
     community: () => communityOn,
     checkCommunity, sharedIndex, getShared, publishShared, mySharedChapters, unshare, reportShared,
     canSignIn: () => enabled && googleOn,
