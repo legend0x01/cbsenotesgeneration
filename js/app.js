@@ -731,6 +731,7 @@
   }
 
   function closeReader() {
+    cancelPrefetch();
     session++;
     if (controller) controller.abort();
     controller = null; busy = false;
@@ -976,7 +977,10 @@
       el.innerHTML = `
         <button data-action="next" class="group w-full max-w-xl flex items-center justify-between gap-4 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 text-white shadow-xl shadow-indigo-500/25 hover:shadow-indigo-500/40 transition active:scale-[.98]">
           <span class="text-left">
-            <span class="block text-[11px] font-bold uppercase tracking-widest opacity-80">Generate next chunk · Part ${done + 1} of ${n}</span>
+            <span class="block text-[11px] font-bold uppercase tracking-widest opacity-80">${
+              prefetch && prefetch.index === done && !prefetch.error
+                ? (prefetch.done ? `Ready · Part ${done + 1} of ${n}` : `Being written in the background · Part ${done + 1} of ${n}`)
+                : `Generate next chunk · Part ${done + 1} of ${n}`}</span>
             <span class="block font-heading font-bold text-lg leading-snug">${esc(data.outline[done].title)}</span>
           </span>
           <i class="fa-solid fa-wand-magic-sparkles text-xl group-hover:rotate-12 transition"></i>
@@ -1084,7 +1088,7 @@
     const my = session, prov = provider();
     busy = true; renderToc(); renderActions();
     showStatus('loading', `<i class="fa-solid fa-spinner fa-spin mr-2"></i><b>Mapping every topic in this chapter…</b><br><span class="text-xs opacity-80">${prov === 'free'
-      ? `The free built-in AI (${esc(FreeAI.LABEL)}) is splitting the chapter into parts. This can take up to a minute.`
+      ? `The free built-in AI (${esc(FreeAI.LABEL)}) is splitting the chapter into parts. The first part starts right after.`
       : 'Gemini is splitting the chapter into parts. The first part starts right after.'}</span>`);
     controller = new AbortController();
     try {
@@ -1116,6 +1120,44 @@
     }
   }
 
+  /* ---------- next part in the background ----------
+     While the student reads part i, part i+1 is already being written, so
+     "Generate next chunk" is instant (or already half-way). */
+  let prefetch = null;
+  function cancelPrefetch() { if (prefetch) { prefetch.controller.abort(); prefetch = null; } }
+
+  function aiStream(prov, i, outline, signal, onText, onThinking) {
+    return prov === 'free'
+      ? FreeAI.stream({ chapterId: currentChapter.id, outline, index: i, signal, onText, onThinking })
+      : Gemini.stream({ system: SYSTEM, prompt: chunkPrompt(currentChapter, outline, i), signal, onText });
+  }
+
+  function startPrefetch(i) {
+    cancelPrefetch();
+    if (!currentChapter || !data?.outline || i >= data.outline.length || i !== data.chunks.length) return;
+    const prov = provider();
+    if (!prov) return;
+    const pf = { chapterId: currentChapter.id, index: i, outline: data.outline, prov, text: '', thinking: false,
+                 done: false, error: null, onText: null, onThinking: null, controller: new AbortController(),
+                 model: prov === 'free' ? FreeAI.MODEL : Gemini.getModel() };
+    pf.promise = aiStream(prov, i, pf.outline, pf.controller.signal,
+      full => { pf.text = full; if (pf.onText) pf.onText(full); },
+      () => { pf.thinking = true; if (pf.onThinking) pf.onThinking(); })
+      .then(r => { pf.done = true; if (prefetch === pf && !busy) renderActions(); return r; },
+            e => { pf.error = e; if (prefetch === pf && !busy) renderActions(); throw e; });
+    pf.promise.catch(() => {});
+    prefetch = pf;
+  }
+
+  /* The background result for part i, if it's for this chapter and outline; otherwise drop it. */
+  function takePrefetch(i) {
+    const pf = prefetch;
+    prefetch = null;
+    if (pf && pf.chapterId === currentChapter?.id && pf.index === i && pf.outline === data.outline && pf.error?.name !== 'AbortError') return pf;
+    if (pf) pf.controller.abort();
+    return null;
+  }
+
   async function generateChunk(i, attempt = 0) {
     if (busy || !data?.outline || i >= data.outline.length) return;
     if (needKey(() => generateChunk(i))) return;
@@ -1138,16 +1180,24 @@
     let pending = null, frame = 0;
     const paint = () => { frame = 0; if (pending !== null) { body.innerHTML = renderMarkdown(pending); pending = null; } };
 
-    controller = new AbortController();
+    const pf = takePrefetch(i);
+    let usedProv = pf ? pf.prov : prov;
+    controller = pf ? pf.controller : new AbortController();
     try {
       const onText = full => { if (my !== session) return; pending = full; if (!frame) frame = requestAnimationFrame(paint); };
-      const { text, finishReason } = prov === 'free'
-        ? await FreeAI.stream({
-            chapterId: currentChapter.id, outline: data.outline, index: i, signal: controller.signal, onText,
-            onThinking: () => { if (my === session && pending === null && !body.querySelector('h2')) body.innerHTML = `<p class="text-sm text-slate-400"><i class="fa-solid fa-brain fa-beat-fade mr-2"></i>${esc(FreeAI.LABEL)} is thinking about “${esc(data.outline[i].title)}”… (this can take a minute)</p>`; }
-          })
-        : await Gemini.stream({ system: SYSTEM, prompt: chunkPrompt(currentChapter, data.outline, i), signal: controller.signal, onText });
-      lastModel = prov === 'free' ? FreeAI.MODEL : Gemini.getModel();
+      const onThinking = () => { if (my === session && pending === null && !body.querySelector('h2')) body.innerHTML = `<p class="text-sm text-slate-400"><i class="fa-solid fa-brain fa-beat-fade mr-2"></i>${esc(FreeAI.LABEL)} is writing notes on “${esc(data.outline[i].title)}”…</p>`; };
+      let result;
+      if (pf) {
+        // Already written (or being written) in the background.
+        if (pf.error) throw pf.error;
+        if (pf.text) onText(pf.text); else if (pf.thinking) onThinking();
+        pf.onText = onText; pf.onThinking = onThinking;
+        result = await pf.promise;
+      } else {
+        result = await aiStream(prov, i, data.outline, controller.signal, onText, onThinking);
+      }
+      const { text, finishReason } = result;
+      lastModel = pf ? pf.model : prov === 'free' ? FreeAI.MODEL : Gemini.getModel();
       if (my !== session) return;
       if (frame) cancelAnimationFrame(frame);
       body.classList.remove('typing-caret');
@@ -1155,7 +1205,9 @@
       section.style.minHeight = '';
       data.chunks[i] = text;
       saveData();
-      busy = false; renderToc(); renderCommunityBanner(); renderActions();
+      busy = false;
+      startPrefetch(i + 1);
+      renderToc(); renderCommunityBanner(); renderActions();
       showModelNotice();
       if (setting('autoShare') && Cloud.user() && Cloud.community()) shareCurrent(true);
       if (finishReason === 'MAX_TOKENS') showStatus('warn', 'This part hit the AI\'s length limit and may end abruptly. Use "Rewrite" to try again.');
@@ -1164,12 +1216,12 @@
       if (frame) cancelAnimationFrame(frame);
       section.remove();
       busy = false;
-      if (prov === 'gemini' && attempt < 3 && err?.kind === 'model') {
+      if (usedProv === 'gemini' && attempt < 3 && err?.kind === 'model') {
         showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i>That AI model isn\'t available for your key. Finding another one…');
         if (await switchModelAfter(err) && my === session) { generateChunk(i, attempt + 1); return; }
       }
       if (my !== session) return;
-      if (fallBackToFree(err, prov)) { generateChunk(i, attempt + 1); return; }
+      if (fallBackToFree(err, usedProv)) { generateChunk(i, attempt + 1); return; }
       renderToc(); renderActions();
       modelNotice = ''; modelNoticeFrom = '';
       showError(err, 'retry-chunk');
@@ -1212,6 +1264,7 @@
   function resetChapter() {
     if (!currentChapter) return;
     if (controller) controller.abort();
+    cancelPrefetch();
     session++; busy = false; loadingCloud = false; betterShared = null;
     const id = currentChapter.id;
     skipSharedFor = id;

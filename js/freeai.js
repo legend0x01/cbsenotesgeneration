@@ -8,8 +8,8 @@ const FreeAI = (() => {
   const cfg = window.NCERT_CONFIG || {};
   const enabled = cfg.freeAI !== false && !!Cloud.enabled;
   const ENDPOINT = cfg.freeAIEndpoint || '/api/generate';
-  const LABEL = 'NVIDIA Nemotron 3 Ultra';
-  const MODEL = 'nvidia/nemotron-3-ultra-550b-a55b';
+  const LABEL = 'NVIDIA Nemotron';
+  let MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';   // updated from the server's reply
 
   class FreeAIError extends Error {
     constructor(message, kind, status) { super(message); this.kind = kind; this.status = status; this.provider = 'free'; }
@@ -38,7 +38,9 @@ const FreeAI = (() => {
   /* -> { chunks: [{ title, topics[] }] } (same shape as Gemini's outline) */
   async function outline({ chapterId, signal }) {
     const res = await post({ mode: 'outline', chapterId }, signal);
-    return res.json();
+    const json = await res.json();
+    if (json.model) MODEL = json.model;
+    return json;
   }
 
   /* Streams one part. onText gets the full text so far; onThinking fires while the model reasons. */
@@ -67,5 +69,5 @@ const FreeAI = (() => {
     return { text: full, finishReason };
   }
 
-  return { enabled, ready, outline, stream, LABEL, MODEL, FreeAIError };
+  return { enabled, ready, outline, stream, LABEL, get MODEL() { return MODEL; }, FreeAIError };
 })();

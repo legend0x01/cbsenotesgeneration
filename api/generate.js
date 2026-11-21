@@ -20,12 +20,20 @@ const { NCERT_CHAPTERS } = require('../js/curriculum.js');
 const P = require('../js/prompts.js');
 
 const NV_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b';
+// Speed: models write straight away with "thinking" off (Nemotron reasons for 5-60 s first otherwise).
+// All adjustable in Vercel → Settings → Environment Variables, no code change needed.
+// Measured on a real NCERT part: Nemotron 3.5 Super 120B shows text after ~2 s and writes ~84 words/s
+// (a 2,000-word part in ~27 s). The 550B Ultra writes ~31 words/s; set NVIDIA_MODEL to
+// 'nvidia/nemotron-3-ultra-550b-a55b' to use it instead.
+const MODEL = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+const OUTLINE_MODEL = process.env.NVIDIA_OUTLINE_MODEL || MODEL;
+const THINKING = (process.env.NVIDIA_THINKING || 'off') === 'on';
+const thinking = (model, on) => (/nemotron/i.test(model) ? { chat_template_kwargs: { enable_thinking: on } } : {});
 const KEYS = (process.env.NVIDIA_API_KEYS || '').split(/[\s,]+/).filter(Boolean);
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xvjaigzelvitfwxkpezy.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_jYtiSpqylPmNtQKZmM7adQ_NeYAoeP3';
 const ORIGIN_OK = /^(https:\/\/cbsenotesgeneration(-[a-z0-9-]+)?\.vercel\.app|http:\/\/localhost(:\d+)?)$/;
-const HOURLY_LIMIT = +(process.env.FREE_AI_HOURLY_LIMIT || 40);
+const HOURLY_LIMIT = +(process.env.FREE_AI_HOURLY_LIMIT || 60);   // includes the next part written in the background
 const RETRY = new Set([401, 403, 408, 429, 500, 502, 503, 504]);
 
 const usage = new Map();   // userId -> request timestamps (per running instance)
@@ -73,7 +81,7 @@ async function callNvidia(body, signal) {
       r = await fetch(NV_URL, {
         method: 'POST', signal,
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: body.stream ? 'text/event-stream' : 'application/json' },
-        body: JSON.stringify({ model: MODEL, ...body })
+        body: JSON.stringify({ model: MODEL, ...body })   // body.model overrides MODEL when given
       });
     } catch (err) {
       if (signal && signal.aborted) throw err;
@@ -93,8 +101,9 @@ const stripThink = s => s.replace(/<think>[\s\S]*?(<\/think>|$)/g, '');
 
 async function makeOutline(ch, signal) {
   const messages = [{ role: 'system', content: P.SYSTEM }, { role: 'user', content: P.outlinePrompt(ch) + P.OUTLINE_JSON_HINT }];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await callNvidia({ messages, temperature: 0.3, max_tokens: 6000 }, signal);
+  // Fast attempts first (no thinking); if the JSON comes back broken twice, let the model think once.
+  for (const think of [THINKING, THINKING, true]) {
+    const r = await callNvidia({ model: OUTLINE_MODEL, messages, temperature: 0.3, max_tokens: 6000, ...thinking(OUTLINE_MODEL, think) }, signal);
     const data = await r.json();
     const outline = P.parseOutlineText(stripThink(data?.choices?.[0]?.message?.content || ''));
     if (outline) return outline;
@@ -104,7 +113,7 @@ async function makeOutline(ch, signal) {
 
 async function streamChunk(ch, outline, index, res, signal) {
   const r = await callNvidia({
-    stream: true, temperature: 0.6, max_tokens: 12000,
+    stream: true, temperature: 0.6, max_tokens: 12000, ...thinking(MODEL, THINKING),
     messages: [{ role: 'system', content: P.SYSTEM }, { role: 'user', content: P.chunkPrompt(ch, outline, index) }]
   }, signal);
 
