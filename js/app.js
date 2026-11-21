@@ -506,7 +506,8 @@
   let myShared = {};    // { chapterId: partsDone } shared by this student
   let communityReady = Promise.resolve();   // set at startup to loadCommunity()
 
-  const SETTINGS = { useShared: ['ncert_use_shared', true], autoShare: ['ncert_auto_share', false], showName: ['ncert_share_name', false] };
+  // [localStorage key, default]. All on by default; students can switch any of them off in Settings.
+  const SETTINGS = { useShared: ['ncert_use_shared', true], autoShare: ['ncert_auto_share', true], showName: ['ncert_share_name', true] };
   function setting(k) { const v = store.raw(SETTINGS[k][0]); return v === null ? SETTINGS[k][1] : v === '1'; }
   function setSetting(k, on) { store.setRaw(SETTINGS[k][0], on ? '1' : '0'); }
 
