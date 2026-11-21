@@ -34,6 +34,11 @@ Detailed, topic-by-topic study notes for every NCERT chapter, written by Google 
   - topic sidebar with progress, rewrite and reset;
   - text size control, dark mode and an eye-care night light;
   - Save as PDF.
+- **Shared notes library:**
+  - When a student shares a chapter, every other student can open it instantly, with no API call and no key needed.
+  - Sharing is optional, either per chapter or automatic in **Settings**.
+  - It's protected by database rules: only more complete copies can replace a shared one, and chapters reported by 3 students are hidden automatically.
+- **Settings panel** for shared notes, account, API key and device storage.
 - **Clear error messages** for a wrong key, rate limits and network problems, each with a retry button.
 - **No build step:** plain HTML, CSS and JavaScript.
 
@@ -67,7 +72,10 @@ js/curriculum.js      Every NCERT chapter for Classes 9–12
 js/gemini.js          Gemini REST client (key check, JSON outline, streamed notes)
 js/cloud.js           Supabase Google sign-in and per-student note storage
 js/app.js             Chapter browser, prompts, chunk-by-chunk reader, sync
-supabase/schema.sql   Notes table with Row Level Security
+supabase/schema.sql   Private notes table with Row Level Security
+supabase/shared_notes.sql  Shared notes library, sharing/report functions and rules
+privacy.html          Privacy Policy
+terms.html            Terms of Service
 ```
 
 ## Privacy

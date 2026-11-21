@@ -159,6 +159,22 @@
         .google-btn:active { transform: scale(.97); }
         .google-btn .fa-google { color: #4285f4; }
 
+        .settings-heading { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: #6366f1; margin-bottom: .5rem; }
+        html.dark .settings-heading { color: #a5b4fc; }
+        .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem .8rem; border-radius: .9rem; cursor: pointer; transition: background .2s; }
+        .setting-row:hover { background: rgba(99,102,241,.06); }
+        .setting-row b { display: block; font-size: .875rem; font-weight: 700; color: #0f172a; }
+        html.dark .setting-row b { color: #f1f5f9; }
+        .setting-row small { display: block; font-size: .75rem; color: #64748b; margin-top: .1rem; }
+        .setting-row.disabled { opacity: .5; cursor: not-allowed; }
+        .switch { appearance: none; -webkit-appearance: none; flex: none; width: 2.6rem; height: 1.5rem; border-radius: 999px; background: #cbd5e1; position: relative; cursor: pointer; transition: background .2s; }
+        html.dark .switch { background: #334155; }
+        .switch::after { content: ""; position: absolute; top: .2rem; left: .2rem; width: 1.1rem; height: 1.1rem; border-radius: 999px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s; }
+        .switch:checked { background: #4f46e5; }
+        .switch:checked::after { transform: translateX(1.1rem); }
+        .switch:disabled { cursor: not-allowed; }
+        .switch:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+
         #guideSteps { counter-reset: step; }
         .guide-step { counter-increment: step; position: relative; padding-left: 3.25rem; }
         .guide-step::before {
@@ -216,6 +232,9 @@
                 </button>
                 <button id="nightLightBtn" title="Eye-care night light" class="hidden sm:flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 transition-all active:scale-95">
                     <i class="fa-solid fa-moon"></i><span>Night Light</span>
+                </button>
+                <button id="settingsBtn" aria-label="Settings" title="Settings" class="w-10 h-10 rounded-full glass-card flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                    <i class="fa-solid fa-gear"></i>
                 </button>
                 <button id="themeToggleBtn" aria-label="Toggle theme" class="w-10 h-10 rounded-full glass-card flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
                     <i class="fa-solid fa-circle-half-stroke"></i>
@@ -433,6 +452,76 @@
         </div>
     </div>
 
+    <!-- ===================== SETTINGS ===================== -->
+    <div id="settingsModal" class="modal-overlay fixed inset-0 z-[57] overflow-y-auto bg-slate-950/70 backdrop-blur-md">
+        <div class="min-h-full flex items-center justify-center p-3 sm:p-6">
+        <div class="reader-container w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div class="flex items-center justify-between gap-3 px-6 py-5 border-b border-slate-200 dark:border-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center"><i class="fa-solid fa-gear"></i></div>
+                    <div>
+                        <h3 class="font-heading font-extrabold text-lg text-slate-900 dark:text-white">Settings</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Saved on this device</p>
+                    </div>
+                </div>
+                <button data-close-settings class="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center" title="Close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="px-6 py-5 space-y-6">
+                <!-- Shared notes -->
+                <section>
+                    <p class="settings-heading"><i class="fa-solid fa-users mr-1.5"></i>Shared notes</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">When a student shares a chapter, everyone can read it instantly. No waiting, and no API key needed.</p>
+                    <p id="communityOffNote" class="hidden text-xs mb-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400">Shared notes aren't available right now.</p>
+                    <div class="space-y-1">
+                        <label class="setting-row">
+                            <span><b>Use shared notes when available</b><small>Open chapters other students have already generated.</small></span>
+                            <input type="checkbox" id="setUseShared" class="switch" />
+                        </label>
+                        <label class="setting-row">
+                            <span><b>Share the notes I generate automatically</b><small>After each part is written, it's added to the shared library.</small></span>
+                            <input type="checkbox" id="setAutoShare" class="switch" />
+                        </label>
+                        <label class="setting-row">
+                            <span><b>Show my first name on notes I share</b><small>Otherwise they're shared as “a student”.</small></span>
+                            <input type="checkbox" id="setShowName" class="switch" />
+                        </label>
+                    </div>
+                    <p id="shareSignInNote" class="hidden text-xs text-slate-500 dark:text-slate-400 mt-2"><i class="fa-solid fa-circle-info mr-1"></i>Sharing needs a Google sign-in. <button data-open-auth class="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Sign in</button></p>
+                    <p id="sharedSummary" class="hidden text-xs text-emerald-600 dark:text-emerald-400 mt-2"></p>
+                </section>
+
+                <!-- Account -->
+                <section id="settingsAccountSection">
+                    <p class="settings-heading"><i class="fa-solid fa-user mr-1.5"></i>Account</p>
+                    <div id="settingsAccount"></div>
+                </section>
+
+                <!-- Gemini -->
+                <section>
+                    <p class="settings-heading"><i class="fa-solid fa-key mr-1.5"></i>Gemini API key</p>
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <p id="settingsKeyStatus" class="text-sm text-slate-600 dark:text-slate-300"></p>
+                        <div class="flex gap-2">
+                            <button data-open-guide class="px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition">Setup guide</button>
+                            <button data-open-key class="px-3 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition">Manage key</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- This device -->
+                <section>
+                    <p class="settings-heading"><i class="fa-solid fa-laptop mr-1.5"></i>This device</p>
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <p id="settingsDeviceInfo" class="text-sm text-slate-600 dark:text-slate-300"></p>
+                        <button id="clearLocalBtn" class="px-3 py-2 rounded-xl text-xs font-bold bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 transition">Delete notes on this device</button>
+                    </div>
+                </section>
+            </div>
+        </div>
+        </div>
+    </div>
+
     <!-- ===================== GET STARTED GUIDE ===================== -->
     <div id="guideModal" class="modal-overlay fixed inset-0 z-[58] overflow-y-auto bg-slate-950/70 backdrop-blur-md">
         <div class="min-h-full flex items-center justify-center p-3 sm:p-6">
@@ -534,6 +623,7 @@
                         <button id="fontDecrease" title="Smaller text" class="w-7 h-7 text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-indigo-600 rounded-lg">A-</button>
                         <button id="fontIncrease" title="Bigger text" class="w-7 h-7 text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-indigo-600 rounded-lg">A+</button>
                     </div>
+                    <button data-open-settings title="Settings" class="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 flex items-center justify-center transition"><i class="fa-solid fa-gear"></i></button>
                     <button id="resetChapterBtn" title="Delete saved notes and start over" class="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 flex items-center justify-center transition"><i class="fa-solid fa-rotate"></i></button>
                     <button id="closeReaderBtn" title="Close" class="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 flex items-center justify-center transition"><i class="fa-solid fa-xmark"></i></button>
                 </div>
@@ -557,6 +647,7 @@
                 <div id="notesScrollContainer" class="notes-scroll-area flex-1 overflow-y-auto px-5 sm:px-10 py-6 text-slate-800 dark:text-slate-200">
                     <div id="printableNotesArea" class="max-w-3xl mx-auto">
                         <div id="notesHeader"></div>
+                        <div id="communityBanner" class="no-print"></div>
                         <div id="chunksContainer"></div>
                         <div id="readerStatus" class="no-print"></div>
                         <div id="readerActions" class="no-print py-8 flex flex-col items-center gap-3"></div>

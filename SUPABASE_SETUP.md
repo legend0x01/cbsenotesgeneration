@@ -19,6 +19,17 @@ It takes about 15 minutes. You need a Google account and a free Supabase account
 
 This creates one table, `notes`, with Row Level Security turned on. Each signed-in student can only read, change or delete their own rows. Visitors who aren't signed in can't read anything.
 
+3. Open another **New query**, paste the whole of [`supabase/shared_notes.sql`](supabase/shared_notes.sql) and click **Run**.
+
+This turns on the **shared notes library**: one public copy of each chapter that any student can read instantly, even without signing in or a Gemini key. The rules are enforced by the database:
+
+- Only signed-in students can share, through a checked function that rejects malformed, empty or oversized notes.
+- A shared chapter can only be replaced by a more complete one, except by the student who shared it.
+- Who shared a chapter is never public. A first name is shown only if the student turns that on.
+- When 3 different students report a chapter, it is hidden. To review it, open **Table Editor** → `shared_notes`: set `hidden` back to `false` to restore it, or delete the row.
+
+Without this step the site still works, and the sharing options simply stay switched off.
+
 ## 3. Create Google OAuth credentials
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/) and create a project (or pick an existing one).

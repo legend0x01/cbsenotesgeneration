@@ -120,7 +120,9 @@
   function chapterCard(ch, prog) {
     const p = prog[ch.id];
     const done = p && p[0] >= p[1];
-    const badge = !p ? `<span class="text-[11px] font-semibold text-slate-400"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Generate notes</span>`
+    const shared = !p && Cloud.community() && setting('useShared') && sharedIdx[ch.id];
+    const badge = shared ? `<span class="text-[11px] font-bold text-cyan-600 dark:text-cyan-400"><i class="fa-solid fa-users mr-1"></i>Shared notes ready · ${shared[0]}/${shared[1]}</span>`
+      : !p ? `<span class="text-[11px] font-semibold text-slate-400"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Generate notes</span>`
       : done ? `<span class="text-[11px] font-bold text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-circle-check mr-1"></i>Notes complete</span>`
       : `<span class="text-[11px] font-bold text-indigo-600 dark:text-indigo-400"><i class="fa-solid fa-book-open mr-1"></i>${p[0]}/${p[1]} parts read</span>`;
     return `
@@ -207,6 +209,7 @@
     $('apiKeyBtnLabel').textContent = has ? 'API key active' : 'Add API key';
     $('noKeyBanner').classList.toggle('hidden', has);
     $('keyRemoveBtn').classList.toggle('hidden', !has);
+    renderSettings();
   }
 
   function setKeyStatus(msg, kind) {
@@ -482,16 +485,104 @@
     }
     if (u) { store.setRaw(AUTH_CHOICE, 'google'); closeAuth(); }
     if (!u) {
-      cloudProgress = {};
-      if (currentChapter) setSync('local');
-      renderChapters();
+      cloudProgress = {}; myShared = {};
+      if (currentChapter) { setSync('local'); renderActions(); }
+      renderChapters(); renderSettings();
       return;
     }
     if (currentChapter) setSync('saved');
+    loadMyShared();
     await syncAccount();
+    renderSettings();
     const back = sessionStorage.getItem(RETURN_KEY);
     if (back) { sessionStorage.removeItem(RETURN_KEY); if (!currentChapter) openReader(back); }
-    else if (currentChapter && !busy) loadFromCloud();
+    else if (currentChapter && !busy) loadFromCloud().then(() => resumeReader());
+  });
+
+  /* ================================================================
+   * SHARED NOTES LIBRARY + SETTINGS
+   * ================================================================ */
+  let sharedIdx = {};   // { chapterId: [partsDone, partsTotal] } shared by anyone
+  let myShared = {};    // { chapterId: partsDone } shared by this student
+  let communityReady = Promise.resolve();   // set at startup to loadCommunity()
+
+  const SETTINGS = { useShared: ['ncert_use_shared', true], autoShare: ['ncert_auto_share', false], showName: ['ncert_share_name', false] };
+  function setting(k) { const v = store.raw(SETTINGS[k][0]); return v === null ? SETTINGS[k][1] : v === '1'; }
+  function setSetting(k, on) { store.setRaw(SETTINGS[k][0], on ? '1' : '0'); }
+
+  async function loadCommunity() {
+    if (!Cloud.enabled) return;
+    try {
+      if (!(await Cloud.checkCommunity())) return;
+      const rows = await Cloud.sharedIndex();
+      sharedIdx = {};
+      rows.forEach(r => { sharedIdx[r.chapter_id] = [r.parts_done, r.parts_total]; });
+    } catch (err) { console.warn('Could not load shared notes', err); }
+    finally { renderChapters(); renderSettings(); }
+  }
+
+  async function loadMyShared() {
+    await communityReady;
+    if (!Cloud.community() || !Cloud.user()) { myShared = {}; return; }
+    try {
+      const rows = await Cloud.mySharedChapters();
+      myShared = {};
+      rows.forEach(r => { myShared[r.chapter_id] = r.parts_done; });
+    } catch (err) { console.warn('Could not load my shared notes', err); }
+    renderSettings();
+    if (currentChapter && !busy) renderActions();
+  }
+
+  function renderSettings() {
+    if (!$('settingsModal')) return;
+    const community = Cloud.community(), signedIn = !!Cloud.user();
+    $('communityOffNote').classList.toggle('hidden', community);
+    const rows = [['setUseShared', 'useShared', !community], ['setAutoShare', 'autoShare', !community || !signedIn], ['setShowName', 'showName', !community || !signedIn]];
+    for (const [elId, key, disabled] of rows) {
+      const el = $(elId);
+      el.checked = setting(key);
+      el.disabled = disabled;
+      el.closest('.setting-row').classList.toggle('disabled', disabled);
+    }
+    $('shareSignInNote').classList.toggle('hidden', !community || signedIn || !Cloud.canSignIn());
+    const n = Object.keys(myShared).length;
+    $('sharedSummary').classList.toggle('hidden', !signedIn || !n);
+    $('sharedSummary').innerHTML = `<i class="fa-solid fa-heart mr-1"></i>You've shared ${n} chapter${n === 1 ? '' : 's'} with other students. Thank you!`;
+
+    const p = Cloud.profile();
+    $('settingsAccountSection').classList.toggle('hidden', !p && !Cloud.canSignIn());
+    $('settingsAccount').innerHTML = p
+      ? `<div class="flex flex-wrap items-center justify-between gap-3">
+           <p class="text-sm text-slate-600 dark:text-slate-300 min-w-0 truncate">Signed in as <b class="text-slate-900 dark:text-white">${esc(p.email || p.name)}</b></p>
+           <button data-signout class="px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:text-rose-600 transition">Sign out</button>
+         </div>`
+      : `<div class="flex flex-wrap items-center justify-between gap-3">
+           <p class="text-sm text-slate-600 dark:text-slate-300">Sign in to keep notes on every device and share them.</p>
+           <button data-signin class="google-btn !py-2 !text-xs"><i class="fa-brands fa-google"></i> Sign in</button>
+         </div>`;
+
+    $('settingsKeyStatus').innerHTML = Gemini.getKey()
+      ? `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i>Key saved · <b>${esc(Gemini.getModel())}</b>`
+      : `<i class="fa-solid fa-circle-exclamation text-amber-500 mr-1"></i>No key yet. You can still read shared notes.`;
+    const count = Object.keys(store.get(PROGRESS_KEY) || {}).length;
+    $('settingsDeviceInfo').textContent = `${count} chapter${count === 1 ? '' : 's'} saved in this browser`;
+  }
+
+  function openSettings() { renderSettings(); $('settingsModal').classList.add('active'); }
+  function closeSettings() { $('settingsModal').classList.remove('active'); }
+  $('settingsBtn').addEventListener('click', openSettings);
+  document.addEventListener('click', e => { if (e.target.closest('[data-open-settings]')) openSettings(); });
+  $('settingsModal').addEventListener('click', e => {
+    if (e.target === $('settingsModal') || e.target === $('settingsModal').firstElementChild || e.target.closest('[data-close-settings]')) closeSettings();
+  });
+  $('setUseShared').addEventListener('change', e => { setSetting('useShared', e.target.checked); renderChapters(); });
+  $('setAutoShare').addEventListener('change', e => { setSetting('autoShare', e.target.checked); });
+  $('setShowName').addEventListener('change', e => { setSetting('showName', e.target.checked); });
+  $('clearLocalBtn').addEventListener('click', () => {
+    if (!confirm('Delete every chapter saved in this browser? Notes saved to your account or shared with everyone are not affected.')) return;
+    try { Object.keys(localStorage).filter(k => k.startsWith('ncert_notes_v2:')).forEach(k => localStorage.removeItem(k)); } catch {}
+    store.del(PROGRESS_KEY);
+    renderChapters(); renderSettings();
   });
 
   // Saves still uploading, so the badge only says "Saved" once the last one lands.
@@ -541,7 +632,6 @@
     } else {
       setSync(failed ? 'error' : 'saved');
     }
-    resumeReader();
   }
 
   /* ================================================================
@@ -656,7 +746,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     const id = currentChapter.id;
     data.model = Gemini.getModel();
     data.updated = Date.now();
-    const record = { outline: data.outline, chunks: data.chunks.slice(), model: data.model, updated: data.updated };
+    const record = { outline: data.outline, chunks: data.chunks.slice(), model: data.model, updated: data.updated, shared: data.shared };
     const ok = store.set(NOTES_KEY(id), record);
     const prog = store.get(PROGRESS_KEY) || {};
     prog[id] = [data.chunks.length, data.outline.length];
@@ -690,8 +780,10 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     loadingCloud = false;
     syncState = Cloud.user() ? 'saved' : 'local';
     renderSyncBadge();
+    if (skipSharedFor !== id) skipSharedFor = null;
+    betterShared = null;
     renderAll();
-    if (Cloud.user()) loadFromCloud(); else resumeReader();
+    prepareChapter();
   }
 
   function closeReader() {
@@ -704,21 +796,155 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     renderChapters();
   }
 
-  /* Decide what to do next for the open chapter. */
+  /* Ask for a Gemini key if there isn't one. Returns true when generation has to wait for it. */
+  function needKey(then) {
+    if (Gemini.getKey()) return false;
+    showNeedKey();
+    if (!store.raw(GUIDE_SEEN)) openGuide(then); else openKeyModal(then);
+    return true;
+  }
+
+  /* Decide what to do next for the open chapter. Notes that already exist (own or shared) need no key to read. */
   function resumeReader() {
     if (!currentChapter || busy || loadingCloud) return;
-    if (!Gemini.getKey()) {
-      showNeedKey();
-      if (!store.raw(GUIDE_SEEN)) openGuide(() => resumeReader()); else openKeyModal(() => resumeReader());
-      return;
+    if (data.outline && data.chunks.length) { renderActions(); return; }
+    if (needKey(() => resumeReader())) return;
+    if (!data.outline) generateOutline(); else generateChunk(0);
+  }
+
+  /* Own copy first (device, then account), then shared notes from other students. */
+  async function prepareChapter() {
+    const my = session;
+    if (Cloud.user()) await loadFromCloud();
+    if (my !== session) return;
+    await offerShared(my);
+    if (my !== session) return;
+    resumeReader();
+  }
+
+  /* ---------- shared (community) notes in the reader ---------- */
+  let betterShared = null;     // a more complete shared copy than the student's own
+  let skipSharedFor = null;    // chapter the student chose to generate themselves
+  let shareBusy = false;
+
+  async function offerShared(my) {
+    betterShared = null;
+    await communityReady;
+    if (my !== session || !currentChapter || !Cloud.community() || !setting('useShared') || skipSharedFor === currentChapter.id) return;
+    const id = currentChapter.id, own = data.chunks.length;
+    if (data.outline && own >= data.outline.length) return;
+    loadingCloud = true;
+    if (!own) showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i><b>Looking for notes other students have shared…</b>');
+    let shared = null;
+    try { shared = await Cloud.getShared(id); } catch (err) { console.warn('Shared notes check failed', err); }
+    if (my !== session) return;
+    loadingCloud = false;
+    clearStatus();
+    if (!shared?.outline?.length || shared.chunks.length <= own) return;
+    sharedIdx[id] = [shared.chunks.length, shared.outline.length];
+    if (own === 0) useSharedCopy(shared);
+    else {
+      betterShared = shared;
+      showStatus('warn', `<i class="fa-solid fa-users mr-1"></i>Another student has shared a more complete version of this chapter: <b>${shared.chunks.length} of ${shared.outline.length} parts</b> (you have ${own}).`,
+        btnHtml('use-shared', 'Switch to the shared version', 'fa-right-left', true));
     }
-    if (!data.outline) generateOutline();
-    else if (data.chunks.length === 0) generateChunk(0);
-    else renderActions();
+  }
+
+  function useSharedCopy(shared) {
+    data = { outline: shared.outline, chunks: shared.chunks.slice(), shared: { by: shared.by || '', parts: shared.chunks.length } };
+    betterShared = null;
+    saveData();
+    renderAll();
+    scroller.scrollTop = 0;
+  }
+
+  function renderCommunityBanner() {
+    const el = $('communityBanner');
+    if (!data?.shared) { el.innerHTML = ''; return; }
+    const by = data.shared.by ? `<b>${esc(data.shared.by)}</b>` : 'another student';
+    const extra = data.chunks.length > data.shared.parts ? ` You generated parts ${data.shared.parts + 1}–${data.chunks.length} yourself.` : '';
+    el.innerHTML = `
+      <div class="mt-4 p-4 rounded-2xl border border-cyan-200 dark:border-cyan-900/70 bg-cyan-50/70 dark:bg-cyan-950/20 text-sm text-slate-700 dark:text-slate-300 flex flex-col sm:flex-row sm:items-center gap-3">
+        <div class="flex items-start gap-3 flex-1">
+          <span class="w-8 h-8 shrink-0 rounded-xl bg-cyan-500 text-white flex items-center justify-center"><i class="fa-solid fa-users text-xs"></i></span>
+          <p><b class="text-slate-900 dark:text-white">Shared notes.</b> Parts 1–${data.shared.parts} were generated by ${by} and shared with everyone, so they opened instantly.${extra} AI notes can contain mistakes, so check with your textbook.</p>
+        </div>
+        <div class="flex gap-4 shrink-0 pl-11 sm:pl-0">
+          <button data-action="own" class="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Generate my own</button>
+          <button data-action="report" class="text-xs font-semibold text-slate-500 hover:text-rose-600"><i class="fa-regular fa-flag mr-1"></i>Report</button>
+        </div>
+      </div>`;
+  }
+
+  function shareRowHtml(done) {
+    if (!Cloud.community() || !Cloud.user() || done === 0) return '';
+    if (shareBusy) return `<span class="text-xs text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i>Sharing…</span>`;
+    const id = currentChapter.id, mine = myShared[id] || 0, publicDone = sharedIdx[id]?.[0] || 0;
+    if (mine && mine >= done) {
+      return `<span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-users mr-1"></i>Shared with everyone</span>
+        <button data-action="unshare" class="text-xs font-semibold text-slate-500 hover:text-rose-600 transition"><i class="fa-solid fa-eye-slash mr-1"></i>Stop sharing</button>`;
+    }
+    if (!mine && publicDone >= done) {
+      return `<span class="text-xs text-slate-400"><i class="fa-solid fa-users mr-1"></i>Already shared with everyone by another student</span>`;
+    }
+    return `<button data-action="share" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition active:scale-95">
+        <i class="fa-solid fa-share-nodes"></i>${mine ? `Update shared notes (${done} parts)` : 'Share with everyone'}</button>
+      <span class="text-[11px] text-slate-400 max-w-[16rem]">Other students can read ${done === data.outline.length ? 'this chapter' : done === 1 ? 'this part' : `these ${done} parts`} without generating ${done === 1 && done !== data.outline.length ? 'it' : 'them'}.</span>`;
+  }
+
+  async function shareCurrent(quiet) {
+    if (!currentChapter || !data?.outline || !data.chunks.length || shareBusy) return;
+    if (!Cloud.user()) { openAuth(); return; }
+    const id = currentChapter.id, done = data.chunks.length, total = data.outline.length, my = session;
+    shareBusy = true; renderActions();
+    try {
+      const res = await Cloud.publishShared(id, { outline: data.outline, chunks: data.chunks, model: data.model }, setting('showName'));
+      if (res?.status === 'shared') {
+        myShared[id] = done; sharedIdx[id] = [done, total];
+        if (!quiet && my === session) showStatus('success', `<i class="fa-solid fa-circle-check mr-1"></i><b>Shared!</b> Every student can now read ${done === total ? 'this chapter' : `parts 1–${done} of this chapter`} without generating it. Thank you!`);
+      } else if (res?.status === 'exists') {
+        sharedIdx[id] = [res.parts_done, res.parts_total];
+        if (!quiet && my === session) showStatus('warn', `Another student has already shared <b>${res.parts_done} of ${res.parts_total}</b> parts of this chapter, so their copy was kept. Once you have more parts than that, you can share yours.`);
+      }
+    } catch (err) {
+      console.warn('Share failed', err);
+      if (!quiet && my === session) showStatus('error', `<i class="fa-solid fa-circle-exclamation mr-1"></i><b>Couldn't share these notes.</b> ${esc(err?.message || err)}`);
+    } finally {
+      shareBusy = false;
+      if (my === session && !busy) renderActions();
+      renderSettings();
+    }
+  }
+
+  async function unshareCurrent() {
+    if (!currentChapter || !confirm('Stop sharing this chapter? Other students will no longer see your copy.')) return;
+    const id = currentChapter.id;
+    try {
+      await Cloud.unshare(id);
+      delete myShared[id]; delete sharedIdx[id];
+      showStatus('success', 'This chapter is no longer shared.');
+    } catch (err) {
+      showStatus('error', `<b>Couldn't stop sharing.</b> ${esc(err?.message || err)}`);
+    }
+    renderActions(); renderSettings();
+  }
+
+  async function reportCurrent() {
+    if (!currentChapter) return;
+    if (!Cloud.user()) { openAuth(); return; }
+    const reason = prompt('What is wrong with these shared notes? (for example: wrong facts, wrong chapter, spam)');
+    if (reason === null) return;
+    try {
+      const r = await Cloud.reportShared(currentChapter.id, reason.trim());
+      showStatus('success', r === 'already' ? 'You have already reported these notes. Thank you!'
+        : '<b>Thanks for reporting.</b> Shared notes reported by several students are hidden until they are reviewed.');
+    } catch (err) {
+      showStatus('error', `<b>Couldn't send the report.</b> ${esc(err?.message || err)}`);
+    }
   }
 
   /* ---------- rendering ---------- */
-  function renderAll() { renderToc(); renderChunks(); renderActions(); clearStatus(); }
+  function renderAll() { renderToc(); renderCommunityBanner(); renderChunks(); renderActions(); clearStatus(); }
 
   function renderToc() {
     const list = $('tocList');
@@ -765,8 +991,10 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     if (busy || !data?.outline) { el.innerHTML = ''; return; }
     const n = data.outline.length, done = data.chunks.length;
     const nudge = Cloud.canSignIn() && !Cloud.user() && done > 0
-      ? `<p class="text-xs text-slate-500 dark:text-slate-400 text-center"><i class="fa-solid fa-cloud-arrow-up mr-1 text-emerald-500"></i>These notes are only on this device. <button data-signin class="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Sign in with Google</button> to keep them on every device.</p>` : '';
-    const regen = (done > 0 ? `<button data-action="regen" class="text-xs font-semibold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition"><i class="fa-solid fa-rotate-right mr-1"></i>Rewrite part ${done}</button>` : '') + nudge;
+      ? `<p class="text-xs text-slate-500 dark:text-slate-400 text-center"><i class="fa-solid fa-cloud-arrow-up mr-1 text-emerald-500"></i>These notes are only on this device. <button data-signin class="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Sign in with Google</button> to keep them on every device${Cloud.community() ? ' and share them with other students' : ''}.</p>` : '';
+    const share = shareRowHtml(done);
+    const regen = (done > 0 ? `<button data-action="regen" class="text-xs font-semibold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition"><i class="fa-solid fa-rotate-right mr-1"></i>Rewrite part ${done}</button>` : '')
+      + (share ? `<div class="flex flex-wrap items-center justify-center gap-3 text-center">${share}</div>` : '') + nudge;
     if (done < n) {
       el.innerHTML = `
         <button data-action="next" class="group w-full max-w-xl flex items-center justify-between gap-4 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 text-white shadow-xl shadow-indigo-500/25 hover:shadow-indigo-500/40 transition active:scale-[.98]">
@@ -791,7 +1019,8 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     const styles = {
       loading: 'border-indigo-200 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300',
       error: 'border-rose-200 dark:border-rose-900 bg-rose-50/70 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300',
-      warn: 'border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300'
+      warn: 'border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300',
+      success: 'border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300'
     };
     $('readerStatus').innerHTML = `<div class="my-6 p-4 rounded-2xl border text-sm ${styles[kind]}">
       <div>${html}</div>${buttons ? `<div class="mt-3 flex flex-wrap gap-2">${buttons}</div>` : ''}</div>`;
@@ -821,6 +1050,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
 
   /* ---------- generation ---------- */
   async function generateOutline() {
+    if (busy || needKey(() => resumeReader())) return;
     const my = session;
     busy = true; renderToc(); renderActions();
     showStatus('loading', `<i class="fa-solid fa-spinner fa-spin mr-2"></i><b>Mapping every topic in this chapter…</b><br><span class="text-xs opacity-80">Gemini is splitting the chapter into parts. The first part starts right after.</span>`);
@@ -845,6 +1075,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
 
   async function generateChunk(i) {
     if (busy || !data?.outline || i >= data.outline.length) return;
+    if (needKey(() => generateChunk(i))) return;
     const my = session;
     busy = true; clearStatus(); renderActions();
 
@@ -874,7 +1105,8 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       body.innerHTML = renderMarkdown(text);
       data.chunks[i] = text;
       saveData();
-      busy = false; renderToc(); renderActions();
+      busy = false; renderToc(); renderCommunityBanner(); renderActions();
+      if (setting('autoShare') && Cloud.user() && Cloud.community()) shareCurrent(true);
       if (finishReason === 'MAX_TOKENS') showStatus('warn', 'This part hit Gemini\'s length limit and may end abruptly. Use "Rewrite" to try again.');
     } catch (err) {
       if (my !== session) return;
@@ -894,6 +1126,11 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     else if (a === 'outline') generateOutline();
     else if (a === 'key') openKeyModal(() => resumeReader());
     else if (a === 'pdf') printNotes();
+    else if (a === 'share') shareCurrent(false);
+    else if (a === 'unshare') unshareCurrent();
+    else if (a === 'report') reportCurrent();
+    else if (a === 'use-shared' && betterShared) useSharedCopy(betterShared);
+    else if (a === 'own' && confirm('Generate this chapter yourself instead? The shared notes will be replaced by new ones written with your Gemini key.')) resetChapter();
   });
 
   $('tocList').addEventListener('click', e => {
@@ -909,10 +1146,16 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   });
 
   $('resetChapterBtn').addEventListener('click', () => {
-    if (!currentChapter || !confirm('Delete the saved notes for this chapter and generate them again?')) return;
+    if (currentChapter && confirm('Delete the saved notes for this chapter and generate them again?')) resetChapter();
+  });
+
+  /* Delete this chapter's own copy (device + account) and generate it again with the student's key. */
+  function resetChapter() {
+    if (!currentChapter) return;
     if (controller) controller.abort();
-    session++; busy = false; loadingCloud = false;
+    session++; busy = false; loadingCloud = false; betterShared = null;
     const id = currentChapter.id;
+    skipSharedFor = id;
     store.del(NOTES_KEY(id));
     const prog = store.get(PROGRESS_KEY) || {};
     delete prog[id];
@@ -921,15 +1164,17 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     if (Cloud.user()) trackSave(Cloud.deleteNotes(id), id);
     data = { outline: null, chunks: [] };
     renderAll(); resumeReader();
-  });
+  }
 
   $('closeReaderBtn').addEventListener('click', closeReader);
   notesModal.addEventListener('click', e => { if (e.target === notesModal) closeReader(); });
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
+    // Close the top-most layer first (same order as their z-index).
     if ($('authModal').classList.contains('active')) closeAuth();
-    else if ($('guideModal').classList.contains('active')) closeGuide();
     else if ($('keyModal').classList.contains('active')) closeKeyModal();
+    else if ($('guideModal').classList.contains('active')) closeGuide();
+    else if ($('settingsModal').classList.contains('active')) closeSettings();
     else if (notesModal.classList.contains('active')) closeReader();
   });
 
@@ -956,6 +1201,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   $('downloadPdfBtn').addEventListener('click', printNotes);
 
   /* ---------------- init ---------------- */
+  communityReady = loadCommunity();
   updateKeyUI();
   renderAccount();
   refreshBrowser();

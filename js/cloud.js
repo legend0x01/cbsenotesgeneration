@@ -132,8 +132,74 @@ const Cloud = (() => {
     return job;
   }
 
+  /* ---------------- shared (community) notes ---------------- */
+  const SHARED_COLS = 'chapter_id, outline, chunks, parts_done, parts_total, model, contributor_name, updated_at';
+  let communityOn = false;
+
+  // Works signed out too. Returns false when supabase/shared_notes.sql hasn't been run yet.
+  async function checkCommunity() {
+    if (!enabled) return (communityOn = false);
+    const { error } = await client.from('shared_notes').select('chapter_id').limit(1);
+    communityOn = !error;
+    if (error) console.warn('NCERT Notes: shared notes are off (run supabase/shared_notes.sql).', error.message || error);
+    return communityOn;
+  }
+
+  /* Small index of every shared chapter, for the "shared notes ready" badges. */
+  async function sharedIndex() {
+    const { data, error } = await client.from('shared_notes').select('chapter_id, parts_done, parts_total');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function getShared(chapterId) {
+    const { data, error } = await client.from('shared_notes').select(SHARED_COLS).eq('chapter_id', chapterId).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      outline: data.outline, chunks: data.chunks || [], model: data.model,
+      by: data.contributor_name || '', updated: Date.parse(data.updated_at) || 0
+    };
+  }
+
+  /* Returns { status: 'shared' | 'exists', parts_done, parts_total }. */
+  async function publishShared(chapterId, notes, showName) {
+    requireUser();
+    const { data, error } = await client.rpc('publish_shared_notes', {
+      p_chapter_id: chapterId, p_outline: notes.outline, p_chunks: notes.chunks,
+      p_model: notes.model || null, p_show_name: !!showName
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function mySharedChapters() {
+    requireUser();
+    const { data, error } = await client.rpc('my_shared_chapters');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function unshare(chapterId) {
+    requireUser();
+    const { data, error } = await client.rpc('unshare_notes', { p_chapter_id: chapterId });
+    if (error) throw error;
+    return !!data;
+  }
+
+  /* Resolves 'reported' or 'already' (this student reported it before). */
+  async function reportShared(chapterId, reason) {
+    requireUser();
+    const { error } = await client.from('shared_note_reports').insert({ chapter_id: chapterId, reason: String(reason || '').slice(0, 500) });
+    if (error?.code === '23505') return 'already';
+    if (error) throw error;
+    return 'reported';
+  }
+
   return {
     enabled,
+    community: () => communityOn,
+    checkCommunity, sharedIndex, getShared, publishShared, mySharedChapters, unshare, reportShared,
     canSignIn: () => enabled && googleOn,
     takeRedirectError: () => { const e = redirectError; redirectError = ''; return e; },
     whenReady: () => readyPromise,
