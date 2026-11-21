@@ -10,8 +10,8 @@
  * Leave both empty and the site still works, saving notes in the browser only.
  * ========================================================================= */
 window.NCERT_CONFIG = {
-  supabaseUrl: '',      // e.g. 'https://abcdefghijklmnop.supabase.co'
-  supabaseAnonKey: '',  // Project Settings → API → Project API keys → anon / public
+  supabaseUrl: 'https://xvjaigzelvitfwxkpezy.supabase.co',
+  supabaseAnonKey: 'sb_publishable_jYtiSpqylPmNtQKZmM7adQ_NeYAoeP3',  // publishable (public) key
 
   // Public contact email shown on the Privacy Policy and Terms pages.
   contactEmail: ''      // e.g. 'ncertnotes.help@gmail.com'
