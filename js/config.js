@@ -14,5 +14,5 @@ window.NCERT_CONFIG = {
   supabaseAnonKey: 'sb_publishable_jYtiSpqylPmNtQKZmM7adQ_NeYAoeP3',  // publishable (public) key
 
   // Public contact email shown on the Privacy Policy and Terms pages.
-  contactEmail: ''      // e.g. 'ncertnotes.help@gmail.com'
+  contactEmail: 'traderabhinav699@gmail.com'
 };
