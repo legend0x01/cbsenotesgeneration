@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>NCERT Notes</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="0.55" stop-color="#9333ea"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.2" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+
+  <!-- open book -->
+  <g transform="translate(0 14)">
+    <path d="M248 214 C 206 188 156 180 104 188 L 104 376 C 156 368 206 376 248 402 Z" fill="#ffffff"/>
+    <path d="M264 214 C 306 188 356 180 408 188 L 408 376 C 356 368 306 376 264 402 Z" fill="#ffffff" fill-opacity="0.9"/>
+    <!-- text lines -->
+    <g stroke="url(#ink)" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.55">
+      <path d="M140 238 C 170 234 196 238 220 248"/>
+      <path d="M140 276 C 170 272 196 276 220 286"/>
+      <path d="M140 314 C 166 311 186 313 204 320"/>
+      <path d="M292 248 C 316 238 342 234 372 238"/>
+      <path d="M292 286 C 316 276 342 272 372 276"/>
+    </g>
+  </g>
+
+  <!-- AI sparkles -->
+  <path d="M382 72 C 388 104 398 114 430 120 C 398 126 388 136 382 168 C 376 136 366 126 334 120 C 366 114 376 104 382 72 Z" fill="#ffffff"/>
+  <path d="M318 96 C 321 110 325 114 339 117 C 325 120 321 124 318 138 C 315 124 311 120 297 117 C 311 114 315 110 318 96 Z" fill="#ffffff" fill-opacity="0.85"/>
+</svg>

@@ -11,5 +11,8 @@
  * ========================================================================= */
 window.NCERT_CONFIG = {
   supabaseUrl: '',      // e.g. 'https://abcdefghijklmnop.supabase.co'
-  supabaseAnonKey: ''   // Project Settings → API → Project API keys → anon / public
+  supabaseAnonKey: '',  // Project Settings → API → Project API keys → anon / public
+
+  // Public contact email shown on the Privacy Policy and Terms pages.
+  contactEmail: ''      // e.g. 'ncertnotes.help@gmail.com'
 };
