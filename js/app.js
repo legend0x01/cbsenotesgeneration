@@ -219,8 +219,11 @@
   }
 
   function fillModels(models, selected) {
-    const sel = $('modelSelect');
-    sel.innerHTML = models.map(m => `<option value="${esc(m)}" ${m === selected ? 'selected' : ''}>${esc(m)}</option>`).join('');
+    const sel = $('modelSelect'), bad = Gemini.badModels();
+    // Best first; models Google refused for this key go last and are labelled.
+    const ordered = [...Gemini.rankModels(models, bad), ...models.filter(m => bad.includes(m))];
+    sel.innerHTML = ordered.map(m => `<option value="${esc(m)}" ${m === selected ? 'selected' : ''}>${esc(m)}${
+      bad.includes(m) ? ' (not available for your key)' : m === ordered[0] ? ' (recommended)' : ''}</option>`).join('');
     $('modelRow').classList.toggle('hidden', models.length === 0);
   }
 
@@ -258,10 +261,11 @@
     setStatus('<i class="fa-solid fa-spinner fa-spin mr-1"></i>Checking your key with Google…', 'info');
     try {
       const models = await Gemini.listModels(key);
+      if (key !== Gemini.getKey()) Gemini.clearBad();   // a different key may have different models
       Gemini.setKey(key);
       store.set('ncert_gemini_models', models);
       const current = Gemini.getModel();
-      const model = models.includes(current) ? current : Gemini.pickBestModel(models);
+      const model = models.includes(current) && !Gemini.badModels().includes(current) ? current : Gemini.pickBestModel(models);
       Gemini.setModel(model);
       fillModels(models, model);
       setStatus(`<i class="fa-solid fa-circle-check mr-1"></i>Key verified. Using <b>${esc(model)}</b>.`, 'ok');
@@ -1073,7 +1077,31 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   }
 
   /* ---------- generation ---------- */
-  async function generateOutline() {
+  /* Google refused the model (retired, or not offered to this key): remember it, reload the
+     model list and switch to the best remaining one. Returns the new model, or null. */
+  let modelNotice = '', modelNoticeFrom = '';
+  async function switchModelAfter(err) {
+    if (err?.kind !== 'model') return null;
+    const bad = Gemini.getModel();
+    const from = modelNoticeFrom || bad;   // name the model the student had chosen, not one tried in between
+    modelNoticeFrom = from;
+    Gemini.markBad(bad);
+    let models = store.get('ncert_gemini_models') || [];
+    try { models = await Gemini.listModels(Gemini.getKey()); store.set('ncert_gemini_models', models); } catch {}
+    const next = Gemini.rankModels(models, Gemini.badModels())[0];
+    if (!next) return null;
+    Gemini.setModel(next);
+    fillModels(Gemini.rankModels(models), next);
+    renderSettings();
+    modelNotice = `<i class="fa-solid fa-circle-info mr-1"></i>The model <b>${esc(from)}</b> isn't available for your key, so NCERT Notes switched to <b>${esc(next)}</b>. You can change it in the API key settings.`;
+    return next;
+  }
+  function showModelNotice() {
+    if (modelNotice) showStatus('success', modelNotice);
+    modelNotice = ''; modelNoticeFrom = '';
+  }
+
+  async function generateOutline(attempt = 0) {
     if (busy || needKey(() => resumeReader())) return;
     const my = session;
     busy = true; renderToc(); renderActions();
@@ -1092,12 +1120,19 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       generateChunk(0);
     } catch (err) {
       if (my !== session) return;
-      busy = false; renderToc(); renderActions();
+      busy = false;
+      if (attempt < 3 && err?.kind === 'model') {
+        showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i>That AI model isn\'t available for your key. Finding another one…');
+        if (await switchModelAfter(err) && my === session) { generateOutline(attempt + 1); return; }
+      }
+      if (my !== session) return;
+      renderToc(); renderActions();
+      modelNotice = ''; modelNoticeFrom = '';
       showError(err, 'outline');
     }
   }
 
-  async function generateChunk(i) {
+  async function generateChunk(i, attempt = 0) {
     if (busy || !data?.outline || i >= data.outline.length) return;
     if (needKey(() => generateChunk(i))) return;
     const my = session;
@@ -1133,13 +1168,21 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       data.chunks[i] = text;
       saveData();
       busy = false; renderToc(); renderCommunityBanner(); renderActions();
+      showModelNotice();
       if (setting('autoShare') && Cloud.user() && Cloud.community()) shareCurrent(true);
       if (finishReason === 'MAX_TOKENS') showStatus('warn', 'This part hit Gemini\'s length limit and may end abruptly. Use "Rewrite" to try again.');
     } catch (err) {
       if (my !== session) return;
       if (frame) cancelAnimationFrame(frame);
       section.remove();
-      busy = false; renderToc(); renderActions();
+      busy = false;
+      if (attempt < 3 && err?.kind === 'model') {
+        showStatus('loading', '<i class="fa-solid fa-spinner fa-spin mr-2"></i>That AI model isn\'t available for your key. Finding another one…');
+        if (await switchModelAfter(err) && my === session) { generateChunk(i, attempt + 1); return; }
+      }
+      if (my !== session) return;
+      renderToc(); renderActions();
+      modelNotice = ''; modelNoticeFrom = '';
       showError(err, 'retry-chunk');
     }
   }

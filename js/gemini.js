@@ -7,9 +7,8 @@ const Gemini = (() => {
   const BASE = 'https://generativelanguage.googleapis.com/v1beta';
   const KEY_STORE = 'ncert_gemini_key';
   const MODEL_STORE = 'ncert_gemini_model';
-  const DEFAULT_MODEL = 'gemini-2.5-flash';
-  // Preferred models, best first. The first one the key can use is picked.
-  const PREFERRED = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-pro-latest'];
+  const BAD_STORE = 'ncert_gemini_bad_models';   // models Google refused for this key
+  const DEFAULT_MODEL = 'gemini-flash-latest';
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -31,10 +30,11 @@ const Gemini = (() => {
     let msg = `Request failed (${res.status})`;
     try { const j = await res.json(); if (j?.error?.message) msg = j.error.message; } catch {}
     let kind = 'other';
-    if (res.status === 400 && /api key|API_KEY/i.test(msg)) kind = 'auth';
+    // A model that is listed but retired / not offered to this key.
+    if (res.status === 404 || /models\/\S+ is not found|not supported for generateContent|no longer available|has been (deprecated|discontinued|shut ?down)/i.test(msg)) kind = 'model';
+    else if (res.status === 400 && /api key|API_KEY/i.test(msg)) kind = 'auth';
     else if (res.status === 401 || res.status === 403) kind = 'auth';
     else if (res.status === 429) kind = 'quota';
-    else if (res.status === 404) kind = 'model';
     else if (res.status >= 500) kind = 'server';
     return new GeminiError(msg, kind, res.status);
   }
@@ -54,10 +54,25 @@ const Gemini = (() => {
       .filter(n => /^gemini/.test(n) && !/(embedding|image|tts|audio|live|vision|robotics|computer-use)/i.test(n));
   }
 
-  function pickBestModel(models) {
-    for (const p of PREFERRED) if (models.includes(p)) return p;
-    return models.find(m => /flash/.test(m)) || models[0] || DEFAULT_MODEL;
+  /* Higher is better: the auto-updating flash alias, then newer versions, full flash over
+     lite over pro (pro is slow with a tiny free quota), stable over preview/experimental. */
+  function rankModel(m) {
+    if (m === 'gemini-flash-latest') return 100;
+    // "-latest" aliases always point at a current-generation model.
+    const v = parseFloat((m.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1] || (/-latest$/.test(m) ? '2.5' : '0'));
+    const lite = /lite/.test(m), flash = /flash/.test(m);
+    return v * 2 + (flash && !lite ? 8 : lite ? 4 : 0) - (/preview|exp/.test(m) ? 0.5 : 0);
   }
+  function rankModels(models, exclude = []) {
+    return models.filter(m => !exclude.includes(m)).sort((a, b) => rankModel(b) - rankModel(a) || a.localeCompare(b));
+  }
+  function pickBestModel(models, exclude = badModels()) {
+    return rankModels(models, exclude)[0] || DEFAULT_MODEL;
+  }
+
+  function badModels() { try { return JSON.parse(store.get(BAD_STORE)) || []; } catch { return []; } }
+  function markBad(m) { const b = badModels(); if (!b.includes(m)) store.set(BAD_STORE, JSON.stringify([...b, m])); }
+  function clearBad() { store.del(BAD_STORE); }
 
   /* Non-streaming JSON call (used for the chapter outline). */
   async function generateJSON({ system, prompt, schema, signal }) {
@@ -123,5 +138,6 @@ const Gemini = (() => {
     return { text: full, finishReason };
   }
 
-  return { getKey, setKey, clearKey, getModel, setModel, listModels, pickBestModel, generateJSON, stream, GeminiError };
+  return { getKey, setKey, clearKey, getModel, setModel, listModels, pickBestModel, rankModels, badModels, markBad, clearBad,
+           generateJSON, stream, GeminiError };
 })();
