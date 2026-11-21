@@ -491,7 +491,7 @@
       return;
     }
     if (currentChapter) setSync('saved');
-    loadMyShared();
+    mySharedReady = loadMyShared();
     await syncAccount();
     renderSettings();
     const back = sessionStorage.getItem(RETURN_KEY);
@@ -505,6 +505,7 @@
   let sharedIdx = {};   // { chapterId: [partsDone, partsTotal] } shared by anyone
   let myShared = {};    // { chapterId: partsDone } shared by this student
   let communityReady = Promise.resolve();   // set at startup to loadCommunity()
+  let mySharedReady = Promise.resolve();    // set on sign-in to loadMyShared()
 
   // [localStorage key, default]. All on by default; students can switch any of them off in Settings.
   const SETTINGS = { useShared: ['ncert_use_shared', true], autoShare: ['ncert_auto_share', true], showName: ['ncert_share_name', true] };
@@ -821,6 +822,17 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     await offerShared(my);
     if (my !== session) return;
     resumeReader();
+    maybeAutoShare(my);
+  }
+
+  /* Auto-share also covers parts written earlier (e.g. before sharing was switched on, or offline). */
+  async function maybeAutoShare(my) {
+    await mySharedReady;
+    if (my !== session || !currentChapter || busy || !data?.outline || !data.chunks.length) return;
+    if (!setting('autoShare') || !Cloud.user() || !Cloud.community()) return;
+    const id = currentChapter.id, done = data.chunks.length;
+    if ((myShared[id] || 0) >= done || (sharedIdx[id]?.[0] || 0) >= done) return;
+    shareCurrent(true);
   }
 
   /* ---------- shared (community) notes in the reader ---------- */
@@ -909,7 +921,10 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       }
     } catch (err) {
       console.warn('Share failed', err);
-      if (!quiet && my === session) showStatus('error', `<i class="fa-solid fa-circle-exclamation mr-1"></i><b>Couldn't share these notes.</b> ${esc(err?.message || err)}`);
+      if (my === session && !busy) {
+        showStatus(quiet ? 'warn' : 'error', `<i class="fa-solid fa-circle-exclamation mr-1"></i><b>Couldn't share these notes${quiet ? ' automatically' : ''}.</b> ${esc(err?.message || err)}`,
+          btnHtml('share', 'Try again', 'fa-rotate-right', true));
+      }
     } finally {
       shareBusy = false;
       if (my === session && !busy) renderActions();
@@ -942,6 +957,14 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     } catch (err) {
       showStatus('error', `<b>Couldn't send the report.</b> ${esc(err?.message || err)}`);
     }
+  }
+
+  /* Scroll ONLY the notes panel. (scrollIntoView also scrolls the page and the reader frame
+     behind it, which pushed the toolbar off-screen and left a white gap.) */
+  function scrollNotesTo(el) {
+    if (!el) return;
+    const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 8;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
   }
 
   /* ---------- rendering ---------- */
@@ -1087,9 +1110,11 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     box.insertAdjacentHTML('beforeend', chunkShell(i));
     renderToc();
     const section = $(`chunk-${i}`), body = section.querySelector('.chunk-body');
+    // Tall enough to scroll to the top while it's still being written; removed when done.
+    section.style.minHeight = scroller.clientHeight + 'px';
     body.classList.add('typing-caret');
     body.innerHTML = `<p class="text-sm text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Writing detailed notes for “${esc(data.outline[i].title)}”…</p>`;
-    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    scrollNotesTo(section);
 
     let pending = null, frame = 0;
     const paint = () => { frame = 0; if (pending !== null) { body.innerHTML = renderMarkdown(pending); pending = null; } };
@@ -1104,6 +1129,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
       if (frame) cancelAnimationFrame(frame);
       body.classList.remove('typing-caret');
       body.innerHTML = renderMarkdown(text);
+      section.style.minHeight = '';
       data.chunks[i] = text;
       saveData();
       busy = false; renderToc(); renderCommunityBanner(); renderActions();
@@ -1137,7 +1163,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   $('tocList').addEventListener('click', e => {
     const b = e.target.closest('[data-toc]'); if (!b || b.disabled) return;
     const i = +b.dataset.toc;
-    if (i < data.chunks.length) $(`chunk-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (i < data.chunks.length) scrollNotesTo($(`chunk-${i}`));
     else if (i === data.chunks.length && !busy) generateChunk(i);
     if (innerWidth < 1024) $('readerSidebar').classList.replace('flex', 'hidden');
   });

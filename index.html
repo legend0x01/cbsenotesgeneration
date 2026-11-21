@@ -128,6 +128,8 @@
         .modal-overlay.active { opacity: 1; visibility: visible; }
         .reader-container { transform: translateY(20px) scale(0.97); transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
         .modal-overlay.active .reader-container { transform: translateY(0) scale(1); }
+        /* The reader frame must never scroll itself (only the notes panel inside it does). */
+        #notesModal .reader-container { overflow: clip; }
 
         /* ---- AI notes typography ---- */
         .notes-md { max-width: none !important; font-size: inherit !important; }
