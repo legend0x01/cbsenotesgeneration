@@ -71,8 +71,10 @@ python -m http.server 8000
 
 Open <http://localhost:8000>:
 
-1. A **Sign in** button appears in the header. Click it and choose a Google account.
+1. On a first visit, a welcome screen offers **Continue with Google** or **Continue without signing in**. Students who skip can sign in later from the **Sign in** button in the header. Click **Continue with Google** and choose an account.
 2. You return to the site, signed in, with your avatar in the header.
+
+If the welcome screen and **Sign in** button don't appear, Supabase reports that the Google provider is off: recheck step 4. If sign-in fails, the reason Google or Supabase gave is shown on the welcome screen.
 3. Open a chapter and generate a part. The reader header shows **Saved to account**.
 4. Open the site in another browser, sign in with the same account, and the chapter opens with the same notes and no new Gemini request.
 

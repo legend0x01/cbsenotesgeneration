@@ -13,6 +13,29 @@ const Cloud = (() => {
   let ready = !enabled;           // true once the first auth state is known
   let readyResolve;
   const readyPromise = new Promise(r => { readyResolve = r; if (ready) r(); });
+  let googleOn = false;           // true once Supabase confirms the Google provider is turned on
+
+  // Error sent back by Supabase/Google after a failed sign-in (?error=…&error_description=…).
+  let redirectError = '';
+  {
+    const params = new URLSearchParams(location.search + '&' + location.hash.replace(/^#/, ''));
+    if (params.get('error') || params.get('error_description')) {
+      redirectError = (params.get('error_description') || params.get('error')).replace(/\+/g, ' ');
+      history.replaceState(null, '', location.pathname);
+    }
+  }
+
+  if (enabled) {
+    // Ask Supabase which sign-in providers are on, so a half-finished setup never sends students to an error page.
+    fetch(`${cfg.supabaseUrl.replace(/\/$/, '')}/auth/v1/settings`, { headers: { apikey: cfg.supabaseAnonKey } })
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`settings ${r.status}`))))
+      .then(s => {
+        googleOn = !!s?.external?.google;
+        if (!googleOn) console.warn('NCERT Notes: Google sign-in is not turned on in Supabase (Authentication → Sign In / Providers → Google).');
+      })
+      .catch(err => { console.warn('NCERT Notes: could not read Supabase auth settings', err); googleOn = true; })
+      .finally(() => listeners.forEach(fn => fn(user, 'PROVIDERS')));
+  }
 
   if (enabled) {
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
@@ -111,6 +134,8 @@ const Cloud = (() => {
 
   return {
     enabled,
+    canSignIn: () => enabled && googleOn,
+    takeRedirectError: () => { const e = redirectError; redirectError = ''; return e; },
     whenReady: () => readyPromise,
     user: () => user,
     profile,

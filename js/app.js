@@ -297,8 +297,9 @@
 
   function renderGuide() {
     const step = $('guideStepSignin');
-    step.classList.toggle('hidden', !Cloud.enabled);
-    if (!Cloud.enabled) return;
+    const show = Cloud.canSignIn() || !!Cloud.user();
+    step.classList.toggle('hidden', !show);
+    if (!show) return;
     const p = Cloud.profile();
     step.classList.toggle('done', !!p);
     $('guideSigninBody').innerHTML = p
@@ -349,12 +350,12 @@
 
   function renderAccount() {
     const area = $('accountArea');
-    $('signinBanner').classList.toggle('hidden', !Cloud.enabled || !!Cloud.user());
-    if (!Cloud.enabled) { area.classList.add('hidden'); return; }
-    area.classList.remove('hidden');
     const p = Cloud.profile();
+    $('signinBanner').classList.toggle('hidden', !Cloud.canSignIn() || !!p);
+    if (!p && !Cloud.canSignIn()) { area.classList.add('hidden'); return; }
+    area.classList.remove('hidden');
     if (!p) {
-      area.innerHTML = `<button data-signin title="Sign in with Google to save your notes" class="google-btn !px-3 !py-2 !rounded-full !text-xs"><i class="fa-brands fa-google"></i><span class="hidden sm:inline">Sign in</span></button>`;
+      area.innerHTML = `<button data-open-auth title="Sign in to save your notes" class="google-btn !px-3 !py-2 !rounded-full !text-xs"><i class="fa-brands fa-google"></i><span class="hidden sm:inline">Sign in</span></button>`;
       return;
     }
     const saved = Object.keys(cloudProgress).length;
@@ -380,7 +381,7 @@
 
   function renderSyncBadge() {
     const el = $('syncBadge');
-    if (!Cloud.enabled) { el.className = 'hidden'; return; }
+    if (!Cloud.user() && !Cloud.canSignIn()) { el.className = 'hidden'; return; }
     const base = 'hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ';
     const states = {
       local: ['bg-slate-200/70 dark:bg-slate-800 text-slate-500 hover:text-indigo-600 cursor-pointer', 'fa-laptop', 'This device only · Sign in'],
@@ -397,15 +398,47 @@
   function setSync(state) { syncState = state; renderSyncBadge(); }
 
   async function startSignIn() {
+    const btn = $('authGoogleBtn');
     try {
+      store.setRaw(AUTH_CHOICE, 'google');
       if (currentChapter) sessionStorage.setItem(RETURN_KEY, currentChapter.id);
+      btn.disabled = true;
+      btn.querySelector('span').textContent = 'Redirecting to Google…';
       await Cloud.signIn();   // redirects to Google
     } catch (err) {
-      alert('Could not start Google sign-in: ' + (err?.message || err));
+      btn.disabled = false;
+      btn.querySelector('span').textContent = 'Continue with Google';
+      showAuthError('Could not start Google sign-in: ' + (err?.message || err));
     }
   }
 
+  /* ---------- sign-in choice screen ---------- */
+  const AUTH_CHOICE = 'ncert_auth_choice';   // 'google' | 'guest' once the student has chosen
+
+  function showAuthError(msg) {
+    const el = $('authError');
+    el.innerHTML = `<i class="fa-solid fa-circle-exclamation mr-1"></i><b>Sign-in didn't work.</b> ${esc(msg)}`;
+    el.classList.remove('hidden');
+    if (!$('authModal').classList.contains('active')) $('authModal').classList.add('active');
+  }
+  function openAuth() {
+    $('authError').classList.add('hidden');
+    const btn = $('authGoogleBtn');
+    btn.disabled = false; btn.querySelector('span').textContent = 'Continue with Google';
+    $('authModal').classList.add('active');
+  }
+  function closeAuth() {
+    if (!$('authModal').classList.contains('active')) return;
+    $('authModal').classList.remove('active');
+    if (!store.raw(AUTH_CHOICE)) store.setRaw(AUTH_CHOICE, 'guest');
+  }
+  $('authGoogleBtn').addEventListener('click', startSignIn);
+  $('authGuestBtn').addEventListener('click', () => { store.setRaw(AUTH_CHOICE, 'guest'); closeAuth(); });
+  $('authModal').addEventListener('click', e => { if (e.target === $('authModal') || e.target === $('authModal').firstElementChild) closeAuth(); });
+
   document.addEventListener('click', async e => {
+    if (e.target.closest('[data-open-auth]')) { openAuth(); return; }
+    if (e.target.closest('[data-close-auth]')) { closeAuth(); return; }
     if (e.target.closest('[data-signin]')) { e.preventDefault(); startSignIn(); return; }
     if (e.target.closest('[data-signout]')) {
       try { await Cloud.signOut(); } catch (err) { alert('Sign out failed: ' + (err?.message || err)); }
@@ -438,8 +471,16 @@
     renderAccount(); renderChapters();
   }
 
-  Cloud.onChange(async u => {
+  Cloud.onChange(async (u, event) => {
     renderAccount(); renderGuide();
+    if (event === 'PROVIDERS') {
+      // Supabase told us whether Google sign-in is on. First visit: offer the choice.
+      if (currentChapter) { renderSyncBadge(); renderActions(); }
+      await Cloud.whenReady();
+      if (Cloud.canSignIn() && !Cloud.user() && !store.raw(AUTH_CHOICE) && !$('authModal').classList.contains('active')) openAuth();
+      return;
+    }
+    if (u) { store.setRaw(AUTH_CHOICE, 'google'); closeAuth(); }
     if (!u) {
       cloudProgress = {};
       if (currentChapter) setSync('local');
@@ -453,17 +494,25 @@
     else if (currentChapter && !busy) loadFromCloud();
   });
 
+  // Saves still uploading, so the badge only says "Saved" once the last one lands.
+  let pendingSaves = 0, saveFailed = false;
+  function trackSave(promise, id) {
+    if (pendingSaves++ === 0) saveFailed = false;
+    setSync('saving');
+    return promise
+      .catch(err => { console.warn('Cloud save failed', err); saveFailed = true; })
+      .finally(() => {
+        if (--pendingSaves === 0 && currentChapter?.id === id) setSync(saveFailed ? 'error' : 'saved');
+      });
+  }
+
   function pushToCloud(id, record) {
     if (!Cloud.user()) return;
-    setSync('saving');
-    Cloud.saveNotes(id, record)
-      .then(() => {
-        const isNew = !cloudProgress[id];
-        if (record.outline) cloudProgress[id] = [record.chunks.length, record.outline.length];
-        if (isNew) renderAccount();
-        if (currentChapter?.id === id) setSync('saved');
-      })
-      .catch(err => { console.warn('Cloud save failed', err); if (currentChapter?.id === id) setSync('error'); });
+    trackSave(Cloud.saveNotes(id, record).then(() => {
+      const isNew = !cloudProgress[id];
+      if (record.outline) cloudProgress[id] = [record.chunks.length, record.outline.length];
+      if (isNew) renderAccount();
+    }), id);
   }
 
   /* When a chapter opens while signed in, use whichever copy (device or account) is further along. */
@@ -715,7 +764,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     const el = $('readerActions');
     if (busy || !data?.outline) { el.innerHTML = ''; return; }
     const n = data.outline.length, done = data.chunks.length;
-    const nudge = Cloud.enabled && !Cloud.user() && done > 0
+    const nudge = Cloud.canSignIn() && !Cloud.user() && done > 0
       ? `<p class="text-xs text-slate-500 dark:text-slate-400 text-center"><i class="fa-solid fa-cloud-arrow-up mr-1 text-emerald-500"></i>These notes are only on this device. <button data-signin class="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Sign in with Google</button> to keep them on every device.</p>` : '';
     const regen = (done > 0 ? `<button data-action="regen" class="text-xs font-semibold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition"><i class="fa-solid fa-rotate-right mr-1"></i>Rewrite part ${done}</button>` : '') + nudge;
     if (done < n) {
@@ -869,10 +918,7 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
     delete prog[id];
     store.set(PROGRESS_KEY, prog);
     delete cloudProgress[id];
-    if (Cloud.user()) {
-      setSync('saving');
-      Cloud.deleteNotes(id).then(() => setSync('saved')).catch(() => setSync('error'));
-    }
+    if (Cloud.user()) trackSave(Cloud.deleteNotes(id), id);
     data = { outline: null, chunks: [] };
     renderAll(); resumeReader();
   });
@@ -881,7 +927,8 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   notesModal.addEventListener('click', e => { if (e.target === notesModal) closeReader(); });
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
-    if ($('guideModal').classList.contains('active')) closeGuide();
+    if ($('authModal').classList.contains('active')) closeAuth();
+    else if ($('guideModal').classList.contains('active')) closeGuide();
     else if ($('keyModal').classList.contains('active')) closeKeyModal();
     else if (notesModal.classList.contains('active')) closeReader();
   });
@@ -913,5 +960,9 @@ ${last ? `- Give a complete chapter summary, all key terms/definitions${lit ? ''
   renderAccount();
   refreshBrowser();
   // First visit with no key: show the step-by-step guide.
+  // (The sign-in choice, when Supabase is set up, opens on top of it.)
   if (!Gemini.getKey() && !store.raw(GUIDE_SEEN)) openGuide();
+  // Google or Supabase sent back an error after sign-in: explain it.
+  const authErr = Cloud.takeRedirectError();
+  if (authErr && Cloud.enabled) showAuthError(authErr);
 })();
