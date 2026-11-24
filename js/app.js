@@ -779,13 +779,16 @@
     maybeAutoShare(my);
   }
 
+  /* Another student's shared copy of this chapter is complete, so it can't be replaced (supabase/shared_notes.sql). */
+  const othersComplete = id => !myShared[id] && !!sharedIdx[id] && sharedIdx[id][0] >= sharedIdx[id][1];
+
   /* Auto-share also covers parts written earlier (e.g. before sharing was switched on, or offline). */
   async function maybeAutoShare(my) {
     await mySharedReady;
     if (my !== session || !currentChapter || busy || !data?.outline || !data.chunks.length) return;
     if (!setting('autoShare') || !Cloud.user() || !Cloud.community()) return;
     const id = currentChapter.id, done = data.chunks.length;
-    if ((myShared[id] || 0) >= done || (sharedIdx[id]?.[0] || 0) >= done) return;
+    if ((myShared[id] || 0) >= done || (sharedIdx[id]?.[0] || 0) >= done || othersComplete(id)) return;
     shareCurrent(true);
   }
 
@@ -851,7 +854,7 @@
       return `<span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-users mr-1"></i>Shared with everyone</span>
         <button data-action="unshare" class="text-xs font-semibold text-slate-500 hover:text-rose-600 transition"><i class="fa-solid fa-eye-slash mr-1"></i>Stop sharing</button>`;
     }
-    if (!mine && publicDone >= done) {
+    if (!mine && (publicDone >= done || othersComplete(id))) {
       return `<span class="text-xs text-slate-400"><i class="fa-solid fa-users mr-1"></i>Already shared with everyone by another student</span>`;
     }
     return `<button data-action="share" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition active:scale-95">
@@ -871,7 +874,9 @@
         if (!quiet && my === session) showStatus('success', `<i class="fa-solid fa-circle-check mr-1"></i><b>Shared!</b> Every student can now read ${done === total ? 'this chapter' : `parts 1–${done} of this chapter`} without generating it. Thank you!`);
       } else if (res?.status === 'exists') {
         sharedIdx[id] = [res.parts_done, res.parts_total];
-        if (!quiet && my === session) showStatus('warn', `Another student has already shared <b>${res.parts_done} of ${res.parts_total}</b> parts of this chapter, so their copy was kept. Once you have more parts than that, you can share yours.`);
+        if (!quiet && my === session) showStatus('warn', res.parts_done >= res.parts_total
+          ? 'Another student has already shared this <b>complete chapter</b>, so their copy was kept.'
+          : `Another student has already shared <b>${res.parts_done} of ${res.parts_total}</b> parts of this chapter, so their copy was kept. Once you have more parts than that, you can share yours.`);
       }
     } catch (err) {
       console.warn('Share failed', err);
@@ -1034,7 +1039,7 @@
     switch (err?.kind) {
       case 'signin': msg = '<b>Please sign in with Google again</b> to use the free built-in AI.'; extra = signInBtn; break;
       case 'auth': msg = '<b>Your API key was rejected.</b> It may be wrong, deleted or restricted.'; extra = btnHtml('key', 'Update API key', 'fa-key', false); break;
-      case 'quota': msg = free ? `<b>The free AI is busy.</b> ${esc(err.message)}` : '<b>Rate limit reached.</b> Gemini\'s free tier limits requests per minute and per day. Wait a minute, then try again.'; break;
+      case 'quota': msg = free ? `<b>Free AI limit reached.</b> ${esc(err.message)}` : '<b>Rate limit reached.</b> Gemini\'s free tier limits requests per minute and per day. Wait a minute, then try again.'; break;
       case 'model': msg = `<b>The model "${esc(Gemini.getModel())}" isn't available for your key.</b> Choose another model in the API key settings.`; extra = btnHtml('key', 'Change model', 'fa-sliders', false); break;
       case 'server': msg = free ? `<b>The free AI had a problem.</b> ${esc(err.message)}` : '<b>Gemini is busy or having problems.</b> Please try again in a moment.'; break;
       default: msg = err instanceof TypeError ? '<b>Network error.</b> Check your internet connection and try again.' : `<b>Something went wrong:</b> ${esc(err?.message || err)}`;

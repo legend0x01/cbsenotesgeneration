@@ -9,6 +9,11 @@
 --   * Only signed-in students can share, and only through
 --     publish_shared_notes(), which checks the notes and never lets a
 --     more complete copy be replaced by a less complete one.
+--   * A complete chapter shared by someone else is never replaced (unless
+--     reports have hidden it), so nobody can swap good notes for junk by
+--     claiming the chapter has more parts.
+--   * One account can newly share (or take over) at most 25 chapters a day.
+--     Updating your own shared copy as you write more parts is not limited.
 --   * Who shared is never exposed; a first name is shown only if they opt in.
 --   * 3 reports from different students hide a chapter automatically.
 --     Review it in Table Editor → shared_notes (set hidden = false to restore,
@@ -72,6 +77,18 @@ drop trigger if exists shared_note_reports_count on public.shared_note_reports;
 create trigger shared_note_reports_count after insert on public.shared_note_reports
   for each row execute function public.count_shared_note_reports();
 
+-- ---------- share log (for the daily limit) ----------
+-- One row each time an account newly shares a chapter or takes over someone
+-- else's copy. Only publish_shared_notes() reads and writes it.
+create table if not exists public.shared_note_shares (
+  user_id    uuid        not null references auth.users (id) on delete cascade,
+  chapter_id text        not null,
+  at         timestamptz not null default now()
+);
+create index if not exists shared_note_shares_user_at on public.shared_note_shares (user_id, at);
+alter table public.shared_note_shares enable row level security;
+revoke all on public.shared_note_shares from anon, authenticated;
+
 -- ---------- share ----------
 create or replace function public.publish_shared_notes(
   p_chapter_id text, p_outline jsonb, p_chunks jsonb, p_model text default null, p_show_name boolean default false)
@@ -82,6 +99,8 @@ declare
   n_done       int;
   cur          public.shared_notes%rowtype;
   display_name text;
+  daily_limit  constant int := 25;
+  n_recent     int;
 begin
   if uid is null then
     raise exception 'Sign in to share notes.' using errcode = '28000';
@@ -112,10 +131,23 @@ begin
 
   select * into cur from public.shared_notes where chapter_id = p_chapter_id for update;
 
-  -- Someone else already shared at least as much: keep theirs.
-  if cur.chapter_id is not null and cur.contributed_by is distinct from uid
-     and not cur.hidden and n_done <= cur.parts_done then
+  -- Someone else's visible copy is kept when it is complete, or has at least as many parts as this one.
+  -- (The sharer chooses how many parts a chapter has, so "more parts" alone must never beat a complete copy.)
+  if cur.chapter_id is not null and cur.contributed_by is distinct from uid and not cur.hidden
+     and (n_done <= cur.parts_done or cur.parts_done >= cur.parts_total) then
     return jsonb_build_object('status', 'exists', 'parts_done', cur.parts_done, 'parts_total', cur.parts_total);
+  end if;
+
+  -- Daily limit on newly sharing or taking over chapters. Updating your own copy is free.
+  if cur.chapter_id is null or cur.contributed_by is distinct from uid then
+    delete from public.shared_note_shares where at < now() - interval '2 days';   -- kept 2 days at most
+    select count(*) into n_recent from public.shared_note_shares
+      where user_id = uid and at > now() - interval '1 day';
+    if n_recent >= daily_limit then
+      raise exception 'You have shared % new chapters in the last 24 hours. You can share more tomorrow.', daily_limit
+        using errcode = 'P0001';
+    end if;
+    insert into public.shared_note_shares (user_id, chapter_id) values (uid, p_chapter_id);
   end if;
 
   if p_show_name then

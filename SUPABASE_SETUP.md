@@ -24,9 +24,14 @@ This creates one table, `notes`, with Row Level Security turned on. Each signed-
 This turns on the **shared notes library**: one public copy of each chapter that any student can read instantly, even without signing in or a Gemini key. The rules are enforced by the database:
 
 - Only signed-in students can share, through a checked function that rejects malformed, empty or oversized notes.
-- A shared chapter can only be replaced by a more complete one, except by the student who shared it.
+- A shared chapter can only be replaced by a more complete one, except by the student who shared it. A complete chapter is never replaced unless reports have hidden it.
+- Each account can newly share (or take over) at most 25 chapters a day. Updating your own shared copy isn't limited.
 - Who shared a chapter is never public. A first name is shown only if the student turns that on.
 - When 3 different students report a chapter, it is hidden. To review it, open **Table Editor** → `shared_notes`: set `hidden` back to `false` to restore it, or delete the row.
+
+4. Open another **New query**, paste the whole of [`supabase/free_ai.sql`](supabase/free_ai.sql) and click **Run**.
+
+This counts free built-in AI usage in the database, so the limits hold on every Vercel server: 60 requests an hour and 200 a day per student, and 3,000 a day for everyone together. Until it is run, the server falls back to a rough per-server hourly count.
 
 Without this step the site still works, and the sharing options simply stay switched off.
 

@@ -10,7 +10,8 @@
  *   - only students signed in with Google (Supabase token checked)
  *   - only NCERT notes: the server builds the prompts itself from a chapter id,
  *     so it can't be used as a general-purpose chatbot
- *   - per-student hourly limit
+ *   - per-student hourly and daily limits plus a daily limit for everyone together,
+ *     counted in Supabase (supabase/free_ai.sql) so they hold across every server copy
  *
  * Body: { mode: "outline", chapterId }                    -> JSON { chunks: [...] }
  *       { mode: "chunk", chapterId, outline, index }      -> Server-Sent Events:
@@ -33,10 +34,14 @@ const KEYS = (process.env.NVIDIA_API_KEYS || '').split(/[\s,]+/).filter(Boolean)
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xvjaigzelvitfwxkpezy.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_jYtiSpqylPmNtQKZmM7adQ_NeYAoeP3';
 const ORIGIN_OK = /^(https:\/\/cbsenotesgeneration(-[a-z0-9-]+)?\.vercel\.app|http:\/\/localhost(:\d+)?)$/;
-const HOURLY_LIMIT = +(process.env.FREE_AI_HOURLY_LIMIT || 60);   // includes the next part written in the background
+// Limits (each request = one topic list or one part, including the next part written in the background).
+// supabase/free_ai.sql enforces them and caps them at 60 / 200 / 3000; these env vars can only lower them.
+const HOURLY_LIMIT = +(process.env.FREE_AI_HOURLY_LIMIT || 60);
+const DAILY_LIMIT = +(process.env.FREE_AI_DAILY_LIMIT || 200);
+const GLOBAL_DAILY_LIMIT = +(process.env.FREE_AI_GLOBAL_DAILY_LIMIT || 3000);
 const RETRY = new Set([401, 403, 408, 429, 500, 502, 503, 504]);
 
-const usage = new Map();   // userId -> request timestamps (per running instance)
+const usage = new Map();   // userId -> request timestamps: fallback only, per running server copy
 
 function send(res, status, obj) {
   res.statusCode = status;
@@ -53,10 +58,11 @@ async function readBody(req) {
   return JSON.parse(raw || '{}');
 }
 
-async function signedInUser(req) {
-  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  if (!m) return null;
-  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${m[1]}` } });
+const bearer = req => (/^Bearer (.+)$/.exec(req.headers.authorization || '') || [])[1] || '';
+
+async function signedInUser(token) {
+  if (!token) return null;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` } });
   if (!r.ok) return null;
   const u = await r.json();
   return u && u.id ? u : null;
@@ -67,6 +73,32 @@ function overLimit(userId) {
   if (recent.length >= HOURLY_LIMIT) { usage.set(userId, recent); return true; }
   recent.push(now); usage.set(userId, recent);
   return false;
+}
+
+function limitMessage(reason, limit) {
+  if (reason === 'day') return `You've used today's free AI allowance (${limit} requests). It frees up again over the next 24 hours, or add your own Gemini key to keep going.`;
+  if (reason === 'everyone') return "The free AI has reached today's limit for all students. Add your own free Gemini key to keep going, or try again tomorrow.";
+  return `Free AI limit reached (${limit} requests per hour). Try again later, or add your own Gemini key.`;
+}
+
+/* Counts this request against the limits in Supabase (use_free_ai in supabase/free_ai.sql).
+ * Returns null when it's allowed, otherwise the message to show. If the database check isn't
+ * set up yet or can't be reached, falls back to the in-memory hourly count. */
+async function checkLimit(userId, token) {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/use_free_ai`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_hourly: HOURLY_LIMIT, p_daily: DAILY_LIMIT, p_global_daily: GLOBAL_DAILY_LIMIT })
+    });
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    if (j && j.ok === true) return null;
+    if (j && j.ok === false) return limitMessage(j.reason, j.limit);
+    console.warn('free AI limit check unavailable, using the in-memory count', r.status);
+  } catch (err) {
+    console.warn('free AI limit check failed, using the in-memory count', err.message);
+  }
+  return overLimit(userId) ? limitMessage('hour', HOURLY_LIMIT) : null;
 }
 
 /* Try the keys in turn (starting at a random one) until one is accepted. */
@@ -155,28 +187,34 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { error: 'Use POST.' });
   if (!ORIGIN_OK.test(req.headers.origin || '')) return send(res, 403, { error: 'Not allowed.' });
 
+  const token = bearer(req);
   let user;
-  try { user = await signedInUser(req); } catch { user = null; }
+  try { user = await signedInUser(token); } catch { user = null; }
   if (!user) return send(res, 401, { error: 'Sign in with Google to use the free AI.' });
-  if (overLimit(user.id)) return send(res, 429, { error: `Free AI limit reached (${HOURLY_LIMIT} requests per hour). Try again later, or add your own Gemini key.` });
 
   let body;
   try { body = await readBody(req); } catch { return send(res, 400, { error: 'Bad request.' }); }
   const ch = NCERT_CHAPTERS.find(c => c.id === body.chapterId);
   if (!ch) return send(res, 400, { error: 'Unknown chapter.' });
+  let outline = null, index = -1;
+  if (body.mode === 'chunk') {
+    outline = P.normalizeOutline(body.outline);
+    index = Number(body.index);
+    if (!outline || !Number.isInteger(index) || index < 0 || index >= outline.length) return send(res, 400, { error: 'Bad outline.' });
+  } else if (body.mode !== 'outline') {
+    return send(res, 400, { error: 'Unknown mode.' });
+  }
+
+  // Only valid requests count against the limits.
+  const limited = await checkLimit(user.id, token);
+  if (limited) return send(res, 429, { error: limited });
 
   const controller = new AbortController();
   res.on('close', () => { if (!res.writableEnded) controller.abort(); });
 
   try {
     if (body.mode === 'outline') return send(res, 200, { chunks: await makeOutline(ch, controller.signal), model: MODEL });
-    if (body.mode === 'chunk') {
-      const outline = P.normalizeOutline(body.outline);
-      const index = Number(body.index);
-      if (!outline || !Number.isInteger(index) || index < 0 || index >= outline.length) return send(res, 400, { error: 'Bad outline.' });
-      return await streamChunk(ch, outline, index, res, controller.signal);
-    }
-    return send(res, 400, { error: 'Unknown mode.' });
+    return await streamChunk(ch, outline, index, res, controller.signal);
   } catch (err) {
     if (controller.signal.aborted) return;
     console.error('generate failed', err.message, err.detail || '');
